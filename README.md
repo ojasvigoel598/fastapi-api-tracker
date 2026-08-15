@@ -175,6 +175,27 @@ sidebar) opens the app in a fresh browser tab — escaping the preview iframe
 where third-party cookie/storage partitioning can otherwise interfere with the
 session.
 
+### Automatic restart after sandbox recycles
+
+The sandbox periodically recycles its container, which kills the foreground
+dev process — this is what makes the preview proxy return
+`502 proxy upstream error` until something restarts the app. To recover
+without manual intervention:
+
+- `scripts/start-preview.sh` is a boot-time supervisor: it waits for the
+  project directory, checks `GET /api/health`, and runs `npm run dev`
+  (Vite + Hono API on port 3000) only when nothing is already serving the
+  port. It restarts the server again if it ever crashes.
+- The sandbox's `start-services.sh` invokes that supervisor on every boot, so
+  the dashboard comes back on its own after each recycle.
+
+`start-services.sh` lives in the sandbox image rather than this repository. On
+a fresh sandbox that is missing the hook, add this line before its `exit 0`:
+
+```sh
+(sh "/home/daytona/codebase/scripts/start-preview.sh" >/tmp/freebuff-preview-supervisor.log 2>&1 &)
+```
+
 ### Data persistence across restarts
 
 - **Demo mode** (no `DATABASE_URL`): data lives in memory and is re-seeded on
@@ -185,9 +206,10 @@ session.
 
 The preview sandbox lifecycle (start/stop/recycle and the proxy's
 container-IP resolution) is managed by the Freebuff platform, not by this
-repository. If the preview proxy reports "failed to resolve container IP",
-restart the preview from the platform (`freebuff-preview restart` where the CLI
-is available) — the app itself starts cleanly with no leftover-state dependency.
+repository. With the boot-time supervisor above in place the app restarts
+itself after a recycle; if a fresh sandbox lacks the hook, restart the preview
+from the platform (`freebuff-preview restart` where the CLI is available) — the
+app itself starts cleanly with no leftover-state dependency.
 
 ## Database setup
 
@@ -241,6 +263,7 @@ recent failures.
 ├── api/                  # Hono bootstrap, tRPC routers, auth, queries, demo store
 ├── contracts/            # Shared constants and errors
 ├── db/                   # Drizzle schema, relations, seed script
+├── scripts/              # start-preview.sh (boot-time dev-server supervisor)
 ├── src/                  # React frontend (pages, components, providers)
 ├── drizzle.config.ts     # Drizzle config
 ├── vite.config.ts        # Vite config
