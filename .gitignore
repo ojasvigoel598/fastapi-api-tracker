@@ -40,7 +40,8 @@ dist-ssr
 *.db
 *.sqlite
 *.sqlite3
-db/migrations/*.sql
+# Note: drizzle-kit migration SQL under db/migrations/ IS committed on purpose —
+# it is the versioned source of truth for the schema, not a local dump.
 
 # TypeScript cache
 *.tsbuildinfo
