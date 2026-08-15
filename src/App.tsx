@@ -4,6 +4,7 @@ import RequestsPage from "./pages/Requests";
 import AnalyticsPage from "./pages/Analytics";
 import EndpointsPage from "./pages/Endpoints";
 import AlertsPage from "./pages/Alerts";
+import LimitsPage from "./pages/Limits";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 
@@ -15,6 +16,7 @@ export default function App() {
       <Route path="/analytics" element={<AnalyticsPage />} />
       <Route path="/endpoints" element={<EndpointsPage />} />
       <Route path="/alerts" element={<AlertsPage />} />
+      <Route path="/limits" element={<LimitsPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="*" element={<NotFound />} />
     </Routes>

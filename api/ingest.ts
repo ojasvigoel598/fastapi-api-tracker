@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Session } from "@contracts/constants";
 import { authenticateRequest } from "./context";
-import { createRequestLog } from "./queries/monitoring";
+import { enforceAndRecord, getUsageLimit } from "./queries/usage";
 
 const ingestSchema = z.object({
   endpoint: z.string().trim().min(1).max(500),
@@ -11,6 +11,7 @@ const ingestSchema = z.object({
   responseSize: z.number().int().min(0).max(2_147_483_647).optional(),
   errorMessage: z.string().max(10_000).optional(),
   requestHeaders: z.record(z.string(), z.string()).optional(),
+  cost: z.number().min(0).optional(),
 });
 
 function json(body: unknown, status = 200): Response {
@@ -23,6 +24,10 @@ function json(body: unknown, status = 200): Response {
 /**
  * Record telemetry from a client that is signed in to this application.
  * The server owns the user id and timestamp; clients cannot submit either.
+ *
+ * When a rate-limit config with `rateLimiting` enabled has reached its hard
+ * limit, the request is rejected with 429 and recorded as a blocked request
+ * (not counted as usage).
  */
 export async function handleIngest(request: Request): Promise<Response> {
   const user = await authenticateRequest(request.headers);
@@ -44,20 +49,119 @@ export async function handleIngest(request: Request): Promise<Response> {
   }
 
   const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const log = await createRequestLog({
-    ...parsed.data,
-    userId: user.id,
-    requestHeaders: parsed.data.requestHeaders ?? {},
-    sourceIp: forwardedFor || null,
-    userAgent: request.headers.get("user-agent"),
-    createdAt: new Date(),
-  });
 
-  return json({
-    ok: true,
-    id: log.id,
-    receivedAt: log.createdAt.toISOString(),
-    user: user.email,
-    cookieName: Session.cookieName,
-  }, 201);
+  const result = await enforceAndRecord(
+    user.id,
+    {
+      ...parsed.data,
+      requestHeaders: parsed.data.requestHeaders ?? {},
+      sourceIp: forwardedFor || null,
+      userAgent: request.headers.get("user-agent"),
+      createdAt: new Date(),
+    },
+    new Date(),
+  );
+
+  if (!result.allowed) {
+    const limit = result.limit;
+    return json(
+      {
+        error: "Rate limit exceeded",
+        message: `The request limit for ${parsed.data.method} ${parsed.data.endpoint} has been reached. Requests are rejected until the usage period resets.`,
+        blocked: true,
+        limit: limit
+          ? {
+              daily: limit.daily,
+              monthly: limit.monthly,
+              cost: limit.cost,
+              resetAt: earliestReset(limit),
+            }
+          : undefined,
+      },
+      429,
+    );
+  }
+
+  return json(
+    {
+      ok: true,
+      id: result.request.id,
+      receivedAt: result.request.createdAt.toISOString(),
+      user: user.email,
+      cookieName: Session.cookieName,
+    },
+    201,
+  );
+}
+
+function earliestReset(limit: {
+  daily: { resetAt: Date };
+  monthly: { resetAt: Date };
+  cost: { resetAt: Date };
+}): string {
+  const times = [limit.daily.resetAt, limit.monthly.resetAt, limit.cost.resetAt]
+    .map((d) => d.getTime())
+    .filter((n) => Number.isFinite(n));
+  return new Date(Math.min(...times)).toISOString();
+}
+
+/**
+ * Pre-flight rate-limit check for a client's API gateway.
+ *
+ * `GET /api/check-limit?endpoint=...&method=...`
+ *
+ * Returns 200 { allowed: true, ... } while under the limit, or 429 with
+ * remaining/reset metadata once the hard limit is reached. This is advisory;
+ * the authoritative enforcement happens on `POST /api/ingest`.
+ */
+export async function handleCheckLimit(request: Request): Promise<Response> {
+  const user = await authenticateRequest(request.headers);
+  if (!user) return json({ error: "Authentication required" }, 401);
+
+  const url = new URL(request.url);
+  const endpoint = (url.searchParams.get("endpoint") ?? "").trim();
+  const method = (url.searchParams.get("method") ?? "").trim().toUpperCase();
+
+  if (!endpoint || !method) {
+    return json({ error: "Missing 'endpoint' or 'method' query parameter" }, 400);
+  }
+
+  const limit = await getUsageLimit(user.id, endpoint, method);
+
+  // No config → no limits → always allowed.
+  if (!limit || !limit.rateLimiting) {
+    return json({
+      allowed: true,
+      limited: false,
+      endpoint,
+      method,
+    });
+  }
+
+  if (!limit.rateLimited) {
+    return json({
+      allowed: true,
+      limited: true,
+      endpoint,
+      method,
+      daily: limit.daily,
+      monthly: limit.monthly,
+      cost: limit.cost,
+    });
+  }
+
+  return json(
+    {
+      allowed: false,
+      limited: true,
+      endpoint,
+      method,
+      daily: limit.daily,
+      monthly: limit.monthly,
+      cost: limit.cost,
+      resetAt: earliestReset(limit),
+      message: "Rate limit exceeded",
+    },
+    429,
+  );
 }

@@ -21,6 +21,7 @@ import { createRouter, authedQuery } from "./middleware";
 import {
   getOverviewMetrics,
   getRequestLogs,
+  getRequestLogById,
   getRequestTimeSeries,
   getEndpoints,
   getStatusCodeDistribution,
@@ -96,6 +97,44 @@ export const monitoringRouter = createRouter({
         ctx.user.id,
       ),
     ),
+
+  // ─── Failures (status >= 400) ──────────────────────────────────────
+
+  failures: authedQuery
+    .input(
+      z.object({
+        endpoint: z.string().optional(),
+        method: z.string().optional(),
+        timeRange: timeRangeSchema.optional(),
+        startDate: z.string().datetime().optional(),
+        endDate: z.string().datetime().optional(),
+        page: z.number().int().min(1).optional().default(1),
+        pageSize: z.number().int().min(1).max(500).optional().default(30),
+      }),
+    )
+    .query(({ input, ctx }) =>
+      getRequestLogs(
+        {
+          endpoint: input.endpoint,
+          method: input.method,
+          timeRange: input.timeRange,
+          startDate: date(input.startDate),
+          endDate: date(input.endDate),
+          minStatusCode: 400,
+        },
+        {
+          page: input.page,
+          pageSize: input.pageSize,
+          sortBy: "createdAt",
+          sortOrder: "desc",
+        },
+        ctx.user.id,
+      ),
+    ),
+
+  requestDetail: authedQuery
+    .input(z.object({ id: z.number().int().positive() }))
+    .query(({ input, ctx }) => getRequestLogById(input.id, ctx.user.id)),
 
   // ─── Time Series Data ─────────────────────────────────────────────
 

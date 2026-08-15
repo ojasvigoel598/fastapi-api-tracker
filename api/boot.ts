@@ -5,7 +5,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
-import { handleIngest } from "./ingest";
+import { handleIngest, handleCheckLimit } from "./ingest";
 
 if (env.isDemoMode) {
   console.warn(
@@ -20,6 +20,7 @@ const app = new Hono<{ Bindings: HttpBindings }>();
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
 app.post("/api/ingest", (c) => handleIngest(c.req.raw));
+app.get("/api/check-limit", (c) => handleCheckLimit(c.req.raw));
 
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({

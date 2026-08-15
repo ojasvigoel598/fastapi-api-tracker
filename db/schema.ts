@@ -66,6 +66,10 @@ export const apiRequests = mysqlTable(
     responseSize: int("response_size"),
     sourceIp: varchar("source_ip", { length: 45 }),
     userAgent: varchar("user_agent", { length: 500 }),
+    // Monetary cost attributed to this request (for spending limits).
+    cost: float("cost").notNull().default(0),
+    // 1 when the request was rejected by rate limiting (not real usage).
+    blocked: int("blocked").notNull().default(0),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
@@ -194,3 +198,96 @@ export const alertRules = mysqlTable("alert_rules", {
 
 export type AlertRule = typeof alertRules.$inferSelect;
 export type InsertAlertRule = typeof alertRules.$inferInsert;
+
+/**
+ * Usage Limits - per-endpoint request/cost limits with threshold and
+ * rate-limiting configuration (per user).
+ *
+ * Usage is derived from the `api_requests` table (non-blocked rows), so the
+ * counts are the source of truth and never drift from a stale counter.
+ */
+export const usageLimits = mysqlTable(
+  "usage_limits",
+  {
+    id: serial("id").primaryKey(),
+    userId: int("user_id").notNull().default(0),
+    endpoint: varchar("endpoint", { length: 500 }).notNull(),
+    method: varchar("method", { length: 10 }).notNull(),
+    // null = unlimited for that period.
+    dailyLimit: int("daily_limit"),
+    monthlyLimit: int("monthly_limit"),
+    // Monthly monetary spending limit.
+    costLimit: float("cost_limit"),
+    // Percentage thresholds (0-100).
+    warningThreshold: float("warning_threshold").notNull().default(80),
+    criticalThreshold: float("critical_threshold").notNull().default(95),
+    emailAlerts: int("email_alerts").notNull().default(0),
+    rateLimiting: int("rate_limiting").notNull().default(0),
+    // Period keys already evaluated, used to detect a usage reset.
+    lastDailyPeriodKey: varchar("last_daily_period_key", { length: 20 }),
+    lastMonthlyPeriodKey: varchar("last_monthly_period_key", { length: 20 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    userIdIdx: index("usage_limits_user_idx").on(table.userId),
+    endpointIdx: index("usage_limits_endpoint_idx").on(table.endpoint),
+    // One limit config per (user, endpoint, method).
+    uniqueLimit: uniqueIndex("usage_limits_user_endpoint_method_idx").on(
+      table.userId,
+      table.endpoint,
+      table.method,
+    ),
+  }),
+);
+
+export type UsageLimit = typeof usageLimits.$inferSelect;
+export type InsertUsageLimit = typeof usageLimits.$inferInsert;
+
+/**
+ * Usage Alerts - the notification/alert state for limit thresholds.
+ *
+ * The unique index dedupes alerts so a threshold fires at most once per
+ * (limit, period, severity, periodKey). When the period rolls over, the
+ * periodKey changes and the same threshold can fire again.
+ */
+export const usageAlerts = mysqlTable(
+  "usage_alerts",
+  {
+    id: serial("id").primaryKey(),
+    userId: int("user_id").notNull().default(0),
+    limitId: int("limit_id").notNull(),
+    endpoint: varchar("endpoint", { length: 500 }).notNull(),
+    method: varchar("method", { length: 10 }).notNull(),
+    period: mysqlEnum("period", ["daily", "monthly"]).notNull(),
+    severity: mysqlEnum("severity", [
+      "warning",
+      "critical",
+      "limit",
+      "reset",
+    ]).notNull(),
+    periodKey: varchar("period_key", { length: 20 }).notNull(),
+    message: text("message").notNull(),
+    details: json("details").$type<Record<string, unknown>>(),
+    // 1 when an email notification was successfully sent.
+    emailed: int("emailed").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("usage_alerts_user_idx").on(table.userId),
+    limitIdx: index("usage_alerts_limit_idx").on(table.limitId),
+    createdAtIdx: index("usage_alerts_created_at_idx").on(table.createdAt),
+    dedupeIdx: uniqueIndex("usage_alerts_dedupe_idx").on(
+      table.limitId,
+      table.period,
+      table.severity,
+      table.periodKey,
+    ),
+  }),
+);
+
+export type UsageAlert = typeof usageAlerts.$inferSelect;
+export type InsertUsageAlert = typeof usageAlerts.$inferInsert;

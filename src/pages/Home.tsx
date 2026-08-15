@@ -24,6 +24,8 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Globe,
   Zap,
@@ -37,6 +39,8 @@ import { useNavigate } from "react-router";
 import type { TimeRange } from "../../api/queries/time-range";
 import TimeRangePicker from "@/components/TimeRangePicker";
 import { toTimeRangeQuery } from "@/lib/time-range";
+import { FailureDetailDialog } from "@/components/FailureDetailDialog";
+import { shortFailureReason, type FailureRequest } from "@/lib/failures";
 import {
   AreaChart,
   Area,
@@ -72,6 +76,16 @@ const STATUS_COLORS: Record<number, string> = {
 };
 
 const LATENCY_COLORS = ["#22c55e", "#86efac", "#fbbf24", "#f59e0b", "#ef4444", "#dc2626"];
+
+function getStatusBadgeClass(code: number): string {
+  if (code >= 200 && code < 300)
+    return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20";
+  if (code >= 300 && code < 400)
+    return "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20";
+  if (code >= 400 && code < 500)
+    return "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20";
+  return "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20";
+}
 
 function formatNumber(num: number): string {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
@@ -206,6 +220,8 @@ export default function Home() {
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [failureLimit, setFailureLimit] = useState(30);
+  const [selectedFailure, setSelectedFailure] = useState<FailureRequest | null>(null);
   const navigate = useNavigate();
   const rangeQuery = useMemo(
     () => toTimeRangeQuery(timeRange, startDate, endDate),
@@ -236,6 +252,11 @@ export default function Home() {
     limit: 5,
   });
 
+  const { data: failures } = trpc.monitoring.failures.useQuery({
+    page: 1,
+    pageSize: failureLimit,
+  });
+
   const statusChartData = useMemo(() => {
     if (!statusDistribution) return [];
     return statusDistribution.map((s) => ({
@@ -256,6 +277,10 @@ export default function Home() {
   }, [latencyDistribution]);
 
   const activeAlerts = alerts?.filter((a) => !a.acknowledged).slice(0, 5) ?? [];
+
+  const failureItems = failures?.items ?? [];
+  const failureTotal = failures?.total ?? 0;
+  const hasMoreFailures = failureTotal > failureItems.length;
 
   return (
     <AuthLayout>
@@ -629,7 +654,82 @@ export default function Home() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Recent Failures */}
+        <Card>
+          <CardHeader className="pb-3 flex flex-row items-center justify-between">
+            <CardTitle className="text-base font-medium flex items-center gap-2">
+              <XCircle className="h-4 w-4 text-destructive" />
+              Recent Failures
+            </CardTitle>
+            <Badge variant="outline" className="text-[10px] font-mono">
+              {failureTotal.toLocaleString()} failed requests
+            </Badge>
+          </CardHeader>
+          <CardContent>
+            {failureItems.length > 0 ? (
+              <div className="space-y-0.5">
+                {failureItems.map((req) => (
+                  <button
+                    key={req.id}
+                    onClick={() => setSelectedFailure(req)}
+                    className="group flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-muted/60 transition-colors"
+                  >
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] font-mono shrink-0 ${getStatusBadgeClass(req.statusCode)}`}
+                    >
+                      {req.statusCode}
+                    </Badge>
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] font-mono shrink-0 bg-muted"
+                    >
+                      {req.method}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                      {req.endpoint}
+                    </span>
+                    <span className="hidden md:block max-w-[40%] truncate text-xs text-muted-foreground">
+                      {shortFailureReason(req)}
+                    </span>
+                    <span className="hidden sm:block shrink-0 text-xs text-muted-foreground">
+                      {req.createdAt.toLocaleString()}
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-10 text-center">
+                <CheckCircle2 className="h-10 w-10 text-emerald-500 mb-3" />
+                <p className="text-sm font-medium">No failures recorded</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Failed requests will appear here as they are tracked.
+                </p>
+              </div>
+            )}
+            {hasMoreFailures && (
+              <div className="mt-3 flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setFailureLimit((l) => Math.min(l + 30, 500))}
+                >
+                  Show More
+                  <ChevronDown className="h-4 w-4 ml-1.5" />
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
+
+      <FailureDetailDialog
+        request={selectedFailure}
+        open={selectedFailure !== null}
+        onOpenChange={(o) => !o && setSelectedFailure(null)}
+      />
     </AuthLayout>
   );
 }

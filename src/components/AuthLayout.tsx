@@ -29,6 +29,7 @@ import {
   BarChart3,
   Globe,
   Bell,
+  Gauge,
   Moon,
   Sun,
 } from "lucide-react";
@@ -49,6 +50,7 @@ const menuItems: MenuItem[] = [
   { icon: BarChart3, label: "Analytics", path: "/analytics" },
   { icon: Globe, label: "Endpoints", path: "/endpoints" },
   { icon: Bell, label: "Alerts", path: "/alerts" },
+  { icon: Gauge, label: "Limits", path: "/limits" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
