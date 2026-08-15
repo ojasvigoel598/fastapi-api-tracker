@@ -6,6 +6,12 @@ import type { User } from "@db/schema";
 import { getSessionCookieOptions } from "./lib/cookies";
 import { env } from "./lib/env";
 import { hashPassword, verifyPassword } from "./auth/password";
+import {
+  checkAuthRateLimit,
+  clientIp,
+  recordAuthFailure,
+  clearAuthFailures,
+} from "./lib/auth-rate-limit";
 import { signSessionToken, verifySupabaseToken } from "./auth/session";
 import {
   findUserById,
@@ -126,6 +132,14 @@ export const authRouter = createRouter({
           message: "Sign up is handled by Supabase when it is configured.",
         });
       }
+      // Gate account creation by source IP to prevent mass sign-up abuse.
+      const blocked = checkAuthRateLimit(input.email, clientIp(ctx.req.headers));
+      if (blocked) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many attempts. Try again in ${blocked.retryAfterSeconds} seconds.`,
+        });
+      }
       const email = input.email.toLowerCase().trim();
       const existing = await findUserByEmail(email);
       if (existing) {
@@ -165,13 +179,31 @@ export const authRouter = createRouter({
           message: "Sign in is handled by Supabase when it is configured.",
         });
       }
-      const user = await findUserByEmail(input.email.toLowerCase().trim());
-      if (!user?.passwordHash || !user?.passwordSalt) {
+      const email = input.email.toLowerCase().trim();
+      const ip = clientIp(ctx.req.headers);
+
+      // Reject before checking credentials once the account or IP is over its
+      // failure budget, so brute-force guessing is stopped regardless of
+      // whether the email exists.
+      const blocked = checkAuthRateLimit(email, ip);
+      if (blocked) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many failed sign-in attempts. Try again in ${blocked.retryAfterSeconds} seconds.`,
+        });
+      }
+
+      const user = await findUserByEmail(email);
+      const invalid =
+        !user?.passwordHash ||
+        !user?.passwordSalt ||
+        !verifyPassword(input.password, user.passwordSalt, user.passwordHash);
+      if (invalid) {
+        recordAuthFailure(email, ip);
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password." });
       }
-      if (!verifyPassword(input.password, user.passwordSalt, user.passwordHash)) {
-        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password." });
-      }
+
+      clearAuthFailures(email);
       await updateLastSignIn(user.id);
       return issueSession(ctx, user);
     }),
