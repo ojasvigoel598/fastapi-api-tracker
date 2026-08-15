@@ -143,7 +143,9 @@ npm run start        # run the production server (node dist/boot.js)
 npm test             # vitest (offline, no external services)
 npm run lint         # eslint
 npm run check        # tsc -b
-npm run db:push      # push the Drizzle schema to MySQL
+npm run db:generate  # generate a new migration from db/schema.ts (offline)
+npm run db:migrate   # apply committed migrations (db/migrations/*) to MySQL
+npm run db:push      # push the Drizzle schema directly to MySQL
 npm run db:seed      # seed the first user (or SEED_USER_ID=<id>) with demo telemetry
 ```
 
