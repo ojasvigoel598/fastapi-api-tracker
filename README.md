@@ -134,6 +134,34 @@ npm run db:push      # push the Drizzle schema to MySQL
 npm run db:seed      # seed the first user (or SEED_USER_ID=<id>) with demo telemetry
 ```
 
+## Preview recovery & sandbox recycling
+
+The app is **IP-agnostic**: the frontend calls the backend on the **same origin**
+(relative `/api/trpc`), and the dev server binds to `0.0.0.0`. Nothing stores or
+depends on a temporary container IP, so a recycled sandbox (new container/IP)
+works as soon as the process comes back up.
+
+- `GET /api/health` — unauthenticated readiness probe (no database, no external
+  calls). Safe for the preview proxy and load balancers to poll.
+- The SPA polls `/api/health`; if the backend disappears it shows a
+  "Connection lost — reconnecting…" banner and retries with **exponential
+  backoff** (1s → 2s → 4s … capped at 30s), then reconnects automatically when
+  the backend returns — no manual refresh required.
+
+### Data persistence across restarts
+
+- **Demo mode** (no `DATABASE_URL`): data lives in memory and is re-seeded on
+  every start, so it resets when the sandbox recycles. This is intentional and
+  labelled in the UI.
+- **Production** (`DATABASE_URL` set): all data lives in external MySQL and
+  survives sandbox recycles because the database is outside the container.
+
+The preview sandbox lifecycle (start/stop/recycle and the proxy's
+container-IP resolution) is managed by the Freebuff platform, not by this
+repository. If the preview proxy reports "failed to resolve container IP",
+restart the preview from the platform (`freebuff-preview restart` where the CLI
+is available) — the app itself starts cleanly with no leftover-state dependency.
+
 ## Database setup
 
 ```bash

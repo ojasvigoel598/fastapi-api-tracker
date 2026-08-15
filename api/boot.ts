@@ -22,6 +22,20 @@ app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 app.post("/api/ingest", (c) => handleIngest(c.req.raw));
 app.get("/api/check-limit", (c) => handleCheckLimit(c.req.raw));
 
+/**
+ * Readiness probe — no auth, no database, no external calls.
+ * Kept cheap and stable so the preview proxy and the browser can detect a
+ * live backend immediately after a sandbox recycle (which may hand the app
+ * a new container IP).
+ */
+app.get("/api/health", (c) =>
+  c.json({
+    ok: true,
+    mode: env.isDemoMode ? "demo" : env.isProduction ? "production" : "development",
+    time: Date.now(),
+  }),
+);
+
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
