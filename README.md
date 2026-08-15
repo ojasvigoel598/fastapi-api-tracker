@@ -91,6 +91,17 @@ with no variables set it runs the zero-credential local demo.
 After changing the schema, run `npm run db:push` (or `db:generate` + `db:migrate`)
 against your production database.
 
+### Owner account (admin)
+
+Set **both** to seed your personal administrator account (used in demo mode and
+by `npm run db:seed`). The password is hashed in memory and never written to disk
+or sent to the browser.
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `OWNER_EMAIL` | Optional | Your login email (granted the `admin` role). |
+| `OWNER_PASSWORD` | Optional | Your login password for that email. |
+
 ### Optional — Clerk Auth
 
 | Variable | Required | Description |
@@ -109,7 +120,6 @@ Set **all three** to switch application authentication to Supabase:
 | `SUPABASE_JWT_SECRET` | Optional | Supabase project JWT secret (server-side only). |
 | `VITE_SUPABASE_URL` | Optional | Browser-exposed copy of `SUPABASE_URL` (public). |
 | `VITE_SUPABASE_ANON_KEY` | Optional | Browser-exposed copy of `SUPABASE_ANON_KEY` (public). |
-| `OWNER_EMAIL` | Optional | Email granted the `admin` role on sign-in. |
 
 Supabase's free plan includes 50,000 monthly active users, a 500 MB database,
 and unlimited API requests — no credit card required.
