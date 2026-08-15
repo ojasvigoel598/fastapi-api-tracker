@@ -7,10 +7,13 @@ import AlertsPage from "./pages/Alerts";
 import LimitsPage from "./pages/Limits";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
+import ReconnectBanner from "./components/ReconnectBanner";
 
 export default function App() {
   return (
-    <Routes>
+    <>
+      <ReconnectBanner />
+      <Routes>
       <Route path="/" element={<Home />} />
       <Route path="/requests" element={<RequestsPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
@@ -19,6 +22,7 @@ export default function App() {
       <Route path="/limits" element={<LimitsPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="*" element={<NotFound />} />
-    </Routes>
+      </Routes>
+    </>
   );
 }

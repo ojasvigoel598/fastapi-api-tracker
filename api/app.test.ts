@@ -61,6 +61,15 @@ describe("app router", () => {
     expect(typeof result.ts).toBe("number");
   });
 
+  it("serves an unauthenticated health endpoint", async () => {
+    const { default: app } = await import("./boot");
+    const res = await app.request("/api/health");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; mode: string };
+    expect(body.ok).toBe(true);
+    expect(body.mode).toBe("demo");
+  });
+
   it("config reports local mode in demo (no Supabase)", async () => {
     const { caller } = await newSession();
     const config = await caller.auth.config();

@@ -7,7 +7,16 @@ import { useMemo, type ReactNode } from "react";
 
 export const trpc = createTRPCReact<AppRouter>();
 
-const queryClient = new QueryClient();
+// Retry transient network failures (e.g. the backend briefly disappears during
+// a sandbox recycle) with exponential backoff, without retrying forever.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 3,
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30_000),
+    },
+  },
+});
 type TokenGetter = () => Promise<string | null>;
 
 export function TRPCProvider({
