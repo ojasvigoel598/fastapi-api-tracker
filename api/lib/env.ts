@@ -1,4 +1,10 @@
 import "dotenv/config";
+import { config as loadEnvFile } from "dotenv";
+
+// Also load the platform-managed local env file (where the Keys/API Keys tab
+// writes values via freebuff-env). `dotenv/config` above only reads `.env`.
+// `.env.local` is gitignored, so these values never reach version control.
+loadEnvFile({ path: ".env.local" });
 
 function required(name: string): string {
   return process.env[name] ?? "";
@@ -55,6 +61,13 @@ export const env = {
 
   /** Optional: email of the deployment owner (granted the admin role). */
   ownerEmail: (process.env.OWNER_EMAIL ?? "").toLowerCase(),
+
+  /**
+   * Optional: password for the owner's local email/password account. Used
+   * together with OWNER_EMAIL to seed an admin account in demo mode (and by
+   * the seed script). Server-only — never exposed to the browser or git.
+   */
+  ownerPassword: required("OWNER_PASSWORD"),
 
   // ─── Kimi (OPTIONAL — AI features only, never required to sign in) ────
   kimiOpenUrl: required("KIMI_OPEN_URL"),

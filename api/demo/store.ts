@@ -21,6 +21,7 @@ import type {
 } from "@db/schema";
 import type { NewUserInput } from "../queries/users";
 import { hashPassword } from "../auth/password";
+import { env } from "../lib/env";
 import { getDateBounds } from "../queries/time-range";
 import {
   periodStart,
@@ -355,6 +356,31 @@ function seed(): void {
 
   seedRequestsForUser(demoUser.id, 1500);
   seedAlertsForUser(demoUser.id);
+
+  // Seed the deployment owner (admin) when OWNER_EMAIL + OWNER_PASSWORD are
+  // configured as server env vars. The password is only ever hashed in memory
+  // and never written to disk or sent to the browser.
+  if (env.ownerEmail && env.ownerPassword && env.ownerEmail !== DEMO_USER.email) {
+    const ownerHash = hashPassword(env.ownerPassword);
+    const ownerUser: User = {
+      id: nextUserId++,
+      email: env.ownerEmail,
+      passwordHash: ownerHash.hash,
+      passwordSalt: ownerHash.salt,
+      supabaseId: null,
+      clerkId: null,
+      unionId: null,
+      name: env.ownerEmail.split("@")[0] || "Owner",
+      avatar: null,
+      role: "admin",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSignInAt: new Date(),
+    };
+    users.push(ownerUser);
+    seedRequestsForUser(ownerUser.id, 400);
+    seedAlertsForUser(ownerUser.id);
+  }
 
   seeded = true;
 }
