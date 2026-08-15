@@ -13,6 +13,7 @@
 
 import { getDb } from "./connection";
 import { env } from "../lib/env";
+import { csvCell } from "../lib/csv";
 import * as demoStore from "../demo/store";
 import {
   apiRequests,
@@ -898,14 +899,14 @@ export async function exportRequests(
   const rows = items.map((item) => [
     item.id,
     item.createdAt.toISOString(),
-    `"${item.endpoint}"`,
+    csvCell(item.endpoint),
     item.method,
     item.statusCode,
     item.latencyMs,
-    item.errorMessage ? `"${item.errorMessage.replace(/"/g, '"')}"` : "",
+    csvCell(item.errorMessage),
     item.responseSize ?? "",
     item.sourceIp ?? "",
-    item.userAgent ? `"${item.userAgent.replace(/"/g, '"')}"` : "",
+    csvCell(item.userAgent),
   ]);
 
   return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");

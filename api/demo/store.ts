@@ -35,6 +35,7 @@ import {
   type UsedCounts,
   type UsageLimitWithUsage,
 } from "../lib/limits";
+import { csvCell } from "../lib/csv";
 import type {
   AutomatedInsight,
   Endpoint,
@@ -1016,14 +1017,14 @@ export function exportRequests(
   const body = rows.map((r) => [
     r.id,
     r.createdAt.toISOString(),
-    `"${r.endpoint}"`,
+    csvCell(r.endpoint),
     r.method,
     r.statusCode,
     r.latencyMs,
-    r.errorMessage ? `"${r.errorMessage.replace(/"/g, '""')}"` : "",
+    csvCell(r.errorMessage),
     r.responseSize ?? "",
     r.sourceIp ?? "",
-    r.userAgent ? `"${r.userAgent.replace(/"/g, '""')}"` : "",
+    csvCell(r.userAgent),
   ]);
   return [headers.join(","), ...body.map((row) => row.join(","))].join("\n");
 }
