@@ -1,4 +1,5 @@
 import { useAuth } from "@/hooks/useAuth";
+import { trpc } from "@/providers/trpc";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -165,17 +166,28 @@ function AuthLayoutContent({
   );
   const isMobile = useIsMobile();
   const { theme, toggleTheme } = useTheme();
+  const { data: kimiStatus } = trpc.kimi.status.useQuery(undefined, {
+    staleTime: Infinity,
+  });
+  const { data: authConfig } = trpc.auth.config.useQuery(undefined, {
+    staleTime: Infinity,
+  });
+  const kimiState = kimiStatus?.state ?? "not_connected";
 
   useEffect(() => {
-    if (isCollapsed) {
+    const handleMouseUp = () => {
       setIsResizing(false);
-    }
-  }, [isCollapsed]);
+    };
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => document.removeEventListener("mouseup", handleMouseUp);
+  }, []);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return;
+    if (!isResizing || isCollapsed) {
+      return;
+    }
 
+    const handleMouseMove = (e: MouseEvent) => {
       const sidebarLeft = sidebarRef.current?.getBoundingClientRect().left ?? 0;
       const newWidth = e.clientX - sidebarLeft;
       if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) {
@@ -183,24 +195,16 @@ function AuthLayoutContent({
       }
     };
 
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
-    if (isResizing) {
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    }
+    document.addEventListener("mousemove", handleMouseMove);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
 
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isResizing, setSidebarWidth]);
+  }, [isResizing, isCollapsed, setSidebarWidth]);
 
   return (
     <>
@@ -254,6 +258,27 @@ function AuthLayoutContent({
 
           <SidebarFooter className="p-3">
             <div className="flex flex-col gap-1">
+              <div
+                className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-[11px] text-muted-foreground group-data-[collapsible=icon]:justify-center"
+                title={kimiStatus?.label}
+              >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    kimiState === "real"
+                      ? "bg-emerald-500"
+                      : kimiState === "mock"
+                        ? "bg-amber-500"
+                        : "bg-muted-foreground"
+                  }`}
+                />
+                <span className="group-data-[collapsible=icon]:hidden">
+                  {kimiState === "real"
+                    ? "Kimi connected"
+                    : kimiState === "mock"
+                      ? "Kimi (mock)"
+                      : "Kimi not connected"}
+                </span>
+              </div>
               <button
                 onClick={toggleTheme}
                 className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring mb-1"
@@ -331,7 +356,14 @@ function AuthLayoutContent({
             </div>
           </div>
         )}
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="min-w-0 flex-1 p-4 md:p-6">
+          {authConfig?.demoMode && (
+            <div className="mb-5 rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+              <span className="font-medium">Local demo data:</span> charts and tables use a seeded in-memory dataset. Requests submitted to <code className="font-mono text-xs">POST /api/ingest</code> are real telemetry for this session and appear in the same dashboard queries.
+            </div>
+          )}
+          {children}
+        </main>
       </SidebarInset>
     </>
   );

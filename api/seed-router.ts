@@ -9,9 +9,12 @@
  */
 
 import { z } from "zod";
-import { createRouter, publicQuery } from "./middleware";
+import { eq } from "drizzle-orm";
+import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { apiRequests, alerts } from "@db/schema";
+import { env } from "./lib/env";
+import * as demoStore from "./demo/store";
 
 const ENDPOINTS = [
   { path: "/api/v1/users", methods: ["GET", "POST", "PUT", "DELETE"] },
@@ -159,7 +162,7 @@ function generateStatusCode(endpoint: string): number {
 }
 
 export const seedRouter = createRouter({
-  generate: publicQuery
+  generate: authedQuery
     .input(
       z
         .object({
@@ -167,7 +170,20 @@ export const seedRouter = createRouter({
         })
         .optional()
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      if (env.isDemoMode) {
+        demoStore.reseed(ctx.user.id);
+        const now = Date.now();
+        return {
+          message: "Regenerated demo data",
+          requestCount: 1500,
+          alertCount: 5,
+          timeRange: {
+            from: new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString(),
+            to: new Date(now).toISOString(),
+          },
+        };
+      }
       const db = getDb();
       const count = input?.count ?? 1200;
 
@@ -186,6 +202,7 @@ export const seedRouter = createRouter({
         userAgent: string | null;
         requestHeaders: Record<string, string>;
         createdAt: Date;
+        userId: number;
       }[] = [];
 
       for (let i = 0; i < count; i++) {
@@ -227,6 +244,7 @@ export const seedRouter = createRouter({
             "X-Request-ID": `req-${Math.random().toString(36).substring(2, 10)}`,
           },
           createdAt: timestamp,
+          userId: ctx.user.id,
         });
       }
 
@@ -290,7 +308,9 @@ export const seedRouter = createRouter({
         },
       ];
 
-      await db.insert(alerts).values(sampleAlerts);
+      await db.insert(alerts).values(
+        sampleAlerts.map((a) => ({ ...a, userId: ctx.user.id })),
+      );
 
       return {
         message: `Generated ${count} request logs and ${sampleAlerts.length} alerts`,
@@ -303,10 +323,14 @@ export const seedRouter = createRouter({
       };
     }),
 
-  clear: publicQuery.mutation(async () => {
+  clear: authedQuery.mutation(async ({ ctx }) => {
+    if (env.isDemoMode) {
+      demoStore.clear(ctx.user.id);
+      return { message: "Your monitoring data cleared" };
+    }
     const db = getDb();
-    await db.delete(apiRequests);
-    await db.delete(alerts);
-    return { message: "All monitoring data cleared" };
+    await db.delete(apiRequests).where(eq(apiRequests.userId, ctx.user.id));
+    await db.delete(alerts).where(eq(alerts.userId, ctx.user.id));
+    return { message: "Your monitoring data cleared" };
   }),
 });

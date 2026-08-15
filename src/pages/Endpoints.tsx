@@ -41,7 +41,9 @@ import {
   Search,
   Zap,
 } from "lucide-react";
-import type { TimeRange } from "../../api/queries/monitoring";
+import type { TimeRange } from "../../api/queries/time-range";
+import TimeRangePicker from "@/components/TimeRangePicker";
+import { toTimeRangeQuery } from "@/lib/time-range";
 import {
   BarChart,
   Bar,
@@ -73,20 +75,39 @@ function getLatencyColorClass(latency: number): string {
 
 const LATENCY_COLORS = ["#22c55e", "#86efac", "#fbbf24", "#f59e0b", "#ef4444", "#dc2626"];
 
+function SortIcon({
+  field,
+  sortBy,
+  sortOrder,
+}: {
+  field: SortField;
+  sortBy: SortField;
+  sortOrder: SortOrder;
+}) {
+  if (sortBy !== field)
+    return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />;
+  return sortOrder === "asc" ? (
+    <ArrowUp className="h-3.5 w-3.5 text-primary" />
+  ) : (
+    <ArrowDown className="h-3.5 w-3.5 text-primary" />
+  );
+}
+
 export default function EndpointsPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [methodFilter, setMethodFilter] = useState("");
   const [sortBy, setSortBy] = useState<SortField>("totalRequests");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [selectedEndpoint, setSelectedEndpoint] = useState<string | null>(null);
+  const rangeQuery = toTimeRangeQuery(timeRange, startDate, endDate);
 
-  const { data: endpoints, isLoading } = trpc.monitoring.endpoints.useQuery({
-    timeRange,
-  });
+  const { data: endpoints, isLoading } = trpc.monitoring.endpoints.useQuery(rangeQuery);
 
   const { data: endpointLatency } = trpc.monitoring.latencyDistribution.useQuery(
     {
-      timeRange,
+      ...rangeQuery,
       endpoint: selectedEndpoint ?? undefined,
     },
     { enabled: !!selectedEndpoint }
@@ -120,15 +141,6 @@ export default function EndpointsPage() {
     }
   };
 
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortBy !== field) return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />;
-    return sortOrder === "asc" ? (
-      <ArrowUp className="h-3.5 w-3.5 text-primary" />
-    ) : (
-      <ArrowDown className="h-3.5 w-3.5 text-primary" />
-    );
-  };
-
   const latencyChartData = useMemo(() => {
     if (!endpointLatency) return [];
     return endpointLatency.map((l, i) => ({
@@ -150,7 +162,10 @@ export default function EndpointsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={methodFilter} onValueChange={setMethodFilter}>
+            <Select
+              value={methodFilter}
+              onValueChange={(value) => setMethodFilter(value === "all" ? "" : value)}
+            >
               <SelectTrigger className="w-[130px]">
                 <SelectValue placeholder="Method" />
               </SelectTrigger>
@@ -163,20 +178,14 @@ export default function EndpointsPage() {
                 <SelectItem value="PATCH">PATCH</SelectItem>
               </SelectContent>
             </Select>
-            <Select
+            <TimeRangePicker
               value={timeRange}
-              onValueChange={(v) => setTimeRange(v as TimeRange)}
-            >
-              <SelectTrigger className="w-[160px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1h">Last Hour</SelectItem>
-                <SelectItem value="6h">Last 6 Hours</SelectItem>
-                <SelectItem value="24h">Last 24 Hours</SelectItem>
-                <SelectItem value="7d">Last 7 Days</SelectItem>
-              </SelectContent>
-            </Select>
+              onChange={setTimeRange}
+              startDate={startDate}
+              endDate={endDate}
+              onStartDateChange={setStartDate}
+              onEndDateChange={setEndDate}
+            />
           </div>
         </div>
 
@@ -196,22 +205,22 @@ export default function EndpointsPage() {
                     <TableRow>
                       <TableHead>
                         <button className="flex items-center gap-1 hover:text-primary" onClick={() => toggleSort("method")}>
-                          Method <SortIcon field="method" />
+                          Method <SortIcon field="method" sortBy={sortBy} sortOrder={sortOrder} />
                         </button>
                       </TableHead>
                       <TableHead>
                         <button className="flex items-center gap-1 hover:text-primary" onClick={() => toggleSort("path")}>
-                          Endpoint <SortIcon field="path" />
+                          Endpoint <SortIcon field="path" sortBy={sortBy} sortOrder={sortOrder} />
                         </button>
                       </TableHead>
                       <TableHead className="text-right">
                         <button className="flex items-center gap-1 hover:text-primary ml-auto" onClick={() => toggleSort("totalRequests")}>
-                          Requests <SortIcon field="totalRequests" />
+                          Requests <SortIcon field="totalRequests" sortBy={sortBy} sortOrder={sortOrder} />
                         </button>
                       </TableHead>
                       <TableHead className="text-right">
                         <button className="flex items-center gap-1 hover:text-primary ml-auto" onClick={() => toggleSort("avgLatencyMs")}>
-                          Avg Latency <SortIcon field="avgLatencyMs" />
+                          Avg Latency <SortIcon field="avgLatencyMs" sortBy={sortBy} sortOrder={sortOrder} />
                         </button>
                       </TableHead>
                       <TableHead className="text-right">Success</TableHead>

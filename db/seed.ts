@@ -2,11 +2,12 @@
  * Database Seed Script
  *
  * Generates 1500+ realistic API request logs and sample alerts.
- * Run with: npx tsx db/seed.ts
+ * Run with: npm run db:seed (optionally set SEED_USER_ID=<id>)
  */
 
+import { eq } from "drizzle-orm";
 import { getDb } from "../api/queries/connection";
-import { apiRequests, alerts } from "./schema";
+import { apiRequests, alerts, users } from "./schema";
 
 const ENDPOINTS = [
   { path: "/api/v1/users", methods: ["GET", "POST", "PUT", "DELETE"] },
@@ -68,7 +69,18 @@ function randomInt(min: number, max: number): number {
 
 async function seed() {
   const db = getDb();
-  console.log("Starting seed...");
+  const requestedUserId = Number(process.env.SEED_USER_ID ?? 0);
+  const userRows = requestedUserId > 0
+    ? await db.select({ id: users.id }).from(users).where(eq(users.id, requestedUserId)).limit(1)
+    : await db.select({ id: users.id }).from(users).limit(1);
+  const seedUserId = userRows[0]?.id;
+  if (!seedUserId) {
+    throw new Error(
+      "No application user exists. Create an account first or set SEED_USER_ID to an existing user id.",
+    );
+  }
+
+  console.log(`Starting seed for user ${seedUserId}...`);
 
   // Clear existing data
   await db.delete(apiRequests);
@@ -106,6 +118,7 @@ async function seed() {
       const ts = new Date(Math.round(sevenDaysAgo + timeWeight * (now - sevenDaysAgo)));
 
       logs.push({
+        userId: seedUserId,
         endpoint: path,
         method,
         statusCode,
@@ -126,6 +139,7 @@ async function seed() {
   // Insert sample alerts
   await db.insert(alerts).values([
     {
+      userId: seedUserId,
       type: "latency_spike",
       severity: "warning",
       endpoint: "/api/v1/search",
@@ -135,6 +149,7 @@ async function seed() {
       createdAt: new Date(now - 2 * 60 * 60 * 1000),
     },
     {
+      userId: seedUserId,
       type: "failure_rate_spike",
       severity: "critical",
       endpoint: "/api/v1/payments/process",
@@ -144,6 +159,7 @@ async function seed() {
       createdAt: new Date(now - 45 * 60 * 1000),
     },
     {
+      userId: seedUserId,
       type: "error_rate_threshold",
       severity: "warning",
       endpoint: "/api/v1/uploads",
@@ -153,6 +169,7 @@ async function seed() {
       createdAt: new Date(now - 3 * 60 * 60 * 1000),
     },
     {
+      userId: seedUserId,
       type: "endpoint_down",
       severity: "critical",
       endpoint: "/api/v1/webhooks",
@@ -163,6 +180,7 @@ async function seed() {
       createdAt: new Date(now - 4 * 60 * 60 * 1000),
     },
     {
+      userId: seedUserId,
       type: "latency_spike",
       severity: "info",
       endpoint: "/api/v1/reports/sales",

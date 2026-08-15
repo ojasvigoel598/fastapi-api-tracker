@@ -2,6 +2,7 @@ import { trpc } from "@/providers/trpc";
 import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { LOGIN_PATH } from "@/const";
+import { useAuthActions } from "@/providers/auth-actions-context";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
@@ -15,6 +16,7 @@ export function useAuth(options?: UseAuthOptions) {
   const navigate = useNavigate();
 
   const utils = trpc.useUtils();
+  const { clerkSignOut } = useAuthActions();
 
   const {
     data: user,
@@ -33,7 +35,10 @@ export function useAuth(options?: UseAuthOptions) {
     },
   });
 
-  const logout = useCallback(() => logoutMutation.mutate(), [logoutMutation]);
+  const logout = useCallback(async () => {
+    await logoutMutation.mutateAsync();
+    await clerkSignOut?.();
+  }, [clerkSignOut, logoutMutation]);
 
   useEffect(() => {
     if (redirectOnUnauthenticated && !isLoading && !user) {
