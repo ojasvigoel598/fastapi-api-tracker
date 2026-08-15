@@ -38,7 +38,8 @@ import { type CSSProperties, type ReactNode, useEffect, useState, useRef } from 
 import { useLocation, useNavigate } from "react-router";
 import { AuthLayoutSkeleton } from "./AuthLayoutSkeleton";
 import { Button } from "./ui/button";
-import { OpenInTabButton, openInNewTab } from "./OpenInTabButton";
+import { OpenInTabButton } from "./OpenInTabButton";
+import { openInNewTab } from "@/lib/open-tab";
 
 type MenuItem = {
   icon: React.ElementType;
