@@ -59,7 +59,9 @@ import {
   FileSpreadsheet,
   RefreshCw,
 } from "lucide-react";
-import type { TimeRange } from "../../api/queries/monitoring";
+import type { TimeRange } from "../../api/queries/time-range";
+import TimeRangePicker from "@/components/TimeRangePicker";
+import { toTimeRangeQuery } from "@/lib/time-range";
 
 type SortField = "createdAt" | "latencyMs" | "statusCode" | "endpoint" | "method";
 type SortOrder = "asc" | "desc";
@@ -86,6 +88,24 @@ function getLatencyColor(latency: number): string {
   return "text-red-600 dark:text-red-400";
 }
 
+function SortIcon({
+  field,
+  sortBy,
+  sortOrder,
+}: {
+  field: SortField;
+  sortBy: SortField;
+  sortOrder: SortOrder;
+}) {
+  if (sortBy !== field)
+    return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />;
+  return sortOrder === "asc" ? (
+    <ArrowUp className="h-3.5 w-3.5 text-primary" />
+  ) : (
+    <ArrowDown className="h-3.5 w-3.5 text-primary" />
+  );
+}
+
 export default function RequestsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -96,7 +116,10 @@ export default function RequestsPage() {
   const [methodFilter, setMethodFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+  const rangeQuery = toTimeRangeQuery(timeRange, startDate, endDate);
 
   const toggleSort = useCallback(
     (field: SortField) => {
@@ -119,13 +142,13 @@ export default function RequestsPage() {
       endpoint: endpointFilter || undefined,
       method: methodFilter || undefined,
       statusCode: statusFilter ? parseInt(statusFilter) : undefined,
-      timeRange,
+      ...rangeQuery,
     },
     pagination: { page, pageSize, sortBy, sortOrder },
   });
 
   const { data: allEndpoints } = trpc.monitoring.endpoints.useQuery({
-    timeRange,
+    ...rangeQuery,
     limit: 100,
   });
 
@@ -138,7 +161,7 @@ export default function RequestsPage() {
           endpoint: endpointFilter || undefined,
           method: methodFilter || undefined,
           statusCode: statusFilter ? parseInt(statusFilter) : undefined,
-          timeRange,
+          ...rangeQuery,
         },
       });
 
@@ -154,22 +177,13 @@ export default function RequestsPage() {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     },
-    [utils, search, endpointFilter, methodFilter, statusFilter, timeRange]
+    [utils, search, endpointFilter, methodFilter, statusFilter, rangeQuery]
   );
 
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortBy !== field) return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />;
-    return sortOrder === "asc" ? (
-      <ArrowUp className="h-3.5 w-3.5 text-primary" />
-    ) : (
-      <ArrowDown className="h-3.5 w-3.5 text-primary" />
-    );
-  };
 
   return (
     <AuthLayout>
@@ -237,9 +251,8 @@ export default function RequestsPage() {
                 </div>
                 <Select
                   value={endpointFilter}
-                  onValueChange={(v) => {
-                    setEndpointFilter(v);
-                    setPage(1);
+                  onValueChange={(v) => {                      setEndpointFilter(v === "all" ? "" : v);
+                      setPage(1);
                   }}
                 >
                   <SelectTrigger>
@@ -296,24 +309,23 @@ export default function RequestsPage() {
                     <SelectItem value="503">503 Unavailable</SelectItem>
                   </SelectContent>
                 </Select>
-                <Select
+                <TimeRangePicker
                   value={timeRange}
-                  onValueChange={(v) => {
-                    setTimeRange(v as TimeRange);
+                  onChange={(value) => {
+                    setTimeRange(value);
                     setPage(1);
                   }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Time Range" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1h">Last Hour</SelectItem>
-                    <SelectItem value="6h">Last 6 Hours</SelectItem>
-                    <SelectItem value="24h">Last 24 Hours</SelectItem>
-                    <SelectItem value="7d">Last 7 Days</SelectItem>
-                    <SelectItem value="30d">Last 30 Days</SelectItem>
-                  </SelectContent>
-                </Select>
+                  startDate={startDate}
+                  endDate={endDate}
+                  onStartDateChange={(value) => {
+                    setStartDate(value);
+                    setPage(1);
+                  }}
+                  onEndDateChange={(value) => {
+                    setEndDate(value);
+                    setPage(1);
+                  }}
+                />
               </div>
             </CardContent>
           </Card>
@@ -332,7 +344,7 @@ export default function RequestsPage() {
                         onClick={() => toggleSort("statusCode")}
                       >
                         Status
-                        <SortIcon field="statusCode" />
+                        <SortIcon field="statusCode" sortBy={sortBy} sortOrder={sortOrder} />
                       </button>
                     </TableHead>
                     <TableHead>
@@ -341,7 +353,7 @@ export default function RequestsPage() {
                         onClick={() => toggleSort("method")}
                       >
                         Method
-                        <SortIcon field="method" />
+                        <SortIcon field="method" sortBy={sortBy} sortOrder={sortOrder} />
                       </button>
                     </TableHead>
                     <TableHead>
@@ -350,7 +362,7 @@ export default function RequestsPage() {
                         onClick={() => toggleSort("endpoint")}
                       >
                         Endpoint
-                        <SortIcon field="endpoint" />
+                        <SortIcon field="endpoint" sortBy={sortBy} sortOrder={sortOrder} />
                       </button>
                     </TableHead>
                     <TableHead>
@@ -359,7 +371,7 @@ export default function RequestsPage() {
                         onClick={() => toggleSort("latencyMs")}
                       >
                         Latency
-                        <SortIcon field="latencyMs" />
+                        <SortIcon field="latencyMs" sortBy={sortBy} sortOrder={sortOrder} />
                       </button>
                     </TableHead>
                     <TableHead>
@@ -368,7 +380,7 @@ export default function RequestsPage() {
                         onClick={() => toggleSort("createdAt")}
                       >
                         Timestamp
-                        <SortIcon field="createdAt" />
+                        <SortIcon field="createdAt" sortBy={sortBy} sortOrder={sortOrder} />
                       </button>
                     </TableHead>
                     <TableHead className="w-[40px]" />

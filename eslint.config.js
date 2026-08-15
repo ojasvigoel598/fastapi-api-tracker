@@ -20,4 +20,12 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // shadcn/ui components and the tRPC provider export helpers/hooks
+    // alongside components by design, which trips the Fast Refresh rule.
+    files: ['src/components/ui/**/*.{ts,tsx}', 'src/providers/trpc.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

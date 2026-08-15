@@ -10,10 +10,14 @@
  * - Automated insights generation
  * - Alert management
  * - Data export (CSV/JSON)
+ *
+ * Every route is authenticated and scoped to the signed-in user, so one user
+ * can never read or mutate another user's monitoring data.
  */
 
 import { z } from "zod";
-import { createRouter, publicQuery, authedQuery } from "./middleware";
+import { TIME_RANGES } from "./queries/time-range";
+import { createRouter, authedQuery } from "./middleware";
 import {
   getOverviewMetrics,
   getRequestLogs,
@@ -31,22 +35,33 @@ import {
   type RequestFilters,
 } from "./queries/monitoring";
 
-const timeRangeSchema = z.enum(["1h", "6h", "24h", "7d", "30d"]);
+const timeRangeSchema = z.enum(TIME_RANGES);
+const dateRangeSchema = {
+  timeRange: timeRangeSchema.optional().default("24h"),
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
+};
+
+function date(value: string | undefined): Date | undefined {
+  return value ? new Date(value) : undefined;
+}
 
 export const monitoringRouter = createRouter({
   // ─── Overview ─────────────────────────────────────────────────────
 
-  overview: publicQuery
+  overview: authedQuery
     .input(
       z.object({
-        timeRange: timeRangeSchema.optional().default("24h"),
-      })
+        ...dateRangeSchema,
+      }),
     )
-    .query(({ input }) => getOverviewMetrics(input.timeRange)),
+    .query(({ input, ctx }) =>
+      getOverviewMetrics(input.timeRange, ctx.user.id, date(input.startDate), date(input.endDate)),
+    ),
 
   // ─── Request Logs ─────────────────────────────────────────────────
 
-  requests: publicQuery
+  requests: authedQuery
     .input(
       z.object({
         filters: z
@@ -68,81 +83,90 @@ export const monitoringRouter = createRouter({
             sortOrder: z.enum(["asc", "desc"]).optional().default("desc"),
           })
           .optional(),
-      })
+      }),
     )
-    .query(({ input }) =>
+    .query(({ input, ctx }) =>
       getRequestLogs(
-        (input.filters ?? {}) as RequestFilters,
-        input.pagination ?? { page: 1, pageSize: 50, sortBy: "createdAt", sortOrder: "desc" }
-      )
+        {
+          ...(input.filters ?? {}),
+          startDate: date(input.filters?.startDate),
+          endDate: date(input.filters?.endDate),
+        } as RequestFilters,
+        input.pagination ?? { page: 1, pageSize: 50, sortBy: "createdAt", sortOrder: "desc" },
+        ctx.user.id,
+      ),
     ),
 
   // ─── Time Series Data ─────────────────────────────────────────────
 
-  timeSeries: publicQuery
+  timeSeries: authedQuery
     .input(
       z.object({
-        timeRange: timeRangeSchema.optional().default("24h"),
+        ...dateRangeSchema,
         groupBy: z.enum(["minute", "hour", "day"]).optional().default("hour"),
-      })
+      }),
     )
-    .query(({ input }) =>
-      getRequestTimeSeries(input.timeRange, input.groupBy)
+    .query(({ input, ctx }) =>
+      getRequestTimeSeries(input.timeRange, input.groupBy, ctx.user.id, date(input.startDate), date(input.endDate)),
     ),
 
   // ─── Endpoints ────────────────────────────────────────────────────
 
-  endpoints: publicQuery
+  endpoints: authedQuery
     .input(
       z.object({
-        timeRange: timeRangeSchema.optional().default("24h"),
+        ...dateRangeSchema,
         limit: z.number().min(1).max(100).optional(),
-      })
+      }),
     )
-    .query(({ input }) => getEndpoints(input.timeRange, input.limit)),
+    .query(({ input, ctx }) =>
+      getEndpoints(input.timeRange, input.limit, ctx.user.id, date(input.startDate), date(input.endDate)),
+    ),
 
   // ─── Distributions ────────────────────────────────────────────────
 
-  statusDistribution: publicQuery
+  statusDistribution: authedQuery
     .input(
       z.object({
-        timeRange: timeRangeSchema.optional().default("24h"),
-      })
+        ...dateRangeSchema,
+      }),
     )
-    .query(({ input }) => getStatusCodeDistribution(input.timeRange)),
-
-  latencyDistribution: publicQuery
-    .input(
-      z.object({
-        timeRange: timeRangeSchema.optional().default("24h"),
-        endpoint: z.string().optional(),
-      })
-    )
-    .query(({ input }) =>
-      getLatencyDistribution(input.timeRange, input.endpoint)
+    .query(({ input, ctx }) =>
+      getStatusCodeDistribution(input.timeRange, ctx.user.id, date(input.startDate), date(input.endDate)),
     ),
 
-  methodDistribution: publicQuery
+  latencyDistribution: authedQuery
     .input(
       z.object({
-        timeRange: timeRangeSchema.optional().default("24h"),
-      })
+        ...dateRangeSchema,
+        endpoint: z.string().optional(),
+      }),
     )
-    .query(({ input }) => getMethodDistribution(input.timeRange)),
+    .query(({ input, ctx }) =>
+      getLatencyDistribution(input.timeRange, input.endpoint, ctx.user.id, date(input.startDate), date(input.endDate)),
+    ),
+
+  methodDistribution: authedQuery
+    .input(z.object({ ...dateRangeSchema }))
+    .query(({ input, ctx }) =>
+      getMethodDistribution(input.timeRange, ctx.user.id, date(input.startDate), date(input.endDate)),
+    ),
 
   // ─── Insights ─────────────────────────────────────────────────────
 
-  insights: publicQuery
+  insights: authedQuery
     .input(
       z.object({
-        timeRange: timeRangeSchema.optional().default("1h"),
-      })
+        ...dateRangeSchema,
+      }),
     )
-    .query(({ input }) => generateInsights(input.timeRange)),
+    .query(({ input, ctx }) =>
+      generateInsights(input.timeRange, ctx.user.id, date(input.startDate), date(input.endDate)),
+    ),
 
   // ─── Alerts ───────────────────────────────────────────────────────
 
-  alerts: publicQuery
+  alerts: authedQuery
     .input(
       z
         .object({
@@ -157,25 +181,26 @@ export const monitoringRouter = createRouter({
             ])
             .optional(),
         })
-        .optional()
+        .optional(),
     )
-    .query(({ input }) =>
-      getAlerts({
-        severity: input?.severity,
-        acknowledged: input?.acknowledged,
-        type: input?.type,
-      })
+    .query(({ input, ctx }) =>
+      getAlerts(
+        {
+          severity: input?.severity,
+          acknowledged: input?.acknowledged,
+          type: input?.type,
+        },
+        ctx.user.id,
+      ),
     ),
 
   acknowledgeAlert: authedQuery
     .input(z.object({ alertId: z.number() }))
-    .mutation(({ input, ctx }) =>
-      acknowledgeAlert(input.alertId, ctx.user.id)
-    ),
+    .mutation(({ input, ctx }) => acknowledgeAlert(input.alertId, ctx.user.id)),
 
   // ─── Export ───────────────────────────────────────────────────────
 
-  export: publicQuery
+  export: authedQuery
     .input(
       z.object({
         format: z.enum(["csv", "json"]),
@@ -190,18 +215,23 @@ export const monitoringRouter = createRouter({
             timeRange: timeRangeSchema.optional(),
           })
           .optional(),
-      })
+      }),
     )
-    .query(({ input }) =>
+    .query(({ input, ctx }) =>
       exportRequests(
-        (input.filters ?? {}) as RequestFilters,
-        input.format
-      )
+        {
+          ...(input.filters ?? {}),
+          startDate: date(input.filters?.startDate),
+          endDate: date(input.filters?.endDate),
+        } as RequestFilters,
+        input.format,
+        ctx.user.id,
+      ),
     ),
 
   // ─── Create Request Log (for demo/mocking) ────────────────────────
 
-  createLog: publicQuery
+  createLog: authedQuery
     .input(
       z.object({
         endpoint: z.string().min(1),
@@ -212,19 +242,20 @@ export const monitoringRouter = createRouter({
         responseSize: z.number().optional(),
         sourceIp: z.string().optional(),
         userAgent: z.string().optional(),
-      })
+      }),
     )
-    .mutation(({ input }) =>
+    .mutation(({ input, ctx }) =>
       createRequestLog({
         ...input,
+        userId: ctx.user.id,
         requestHeaders: {},
         createdAt: new Date(),
-      })
+      }),
     ),
 
   // ─── Create Alert (for demo/mocking) ──────────────────────────────
 
-  createAlert: publicQuery
+  createAlert: authedQuery
     .input(
       z.object({
         type: z.enum([
@@ -237,17 +268,18 @@ export const monitoringRouter = createRouter({
         endpoint: z.string().optional(),
         message: z.string().min(1),
         details: z.record(z.string(), z.unknown()).optional(),
-      })
+      }),
     )
-    .mutation(({ input }) =>
+    .mutation(({ input, ctx }) =>
       createAlert({
         type: input.type,
         severity: input.severity,
         endpoint: input.endpoint,
         message: input.message,
         details: input.details,
+        userId: ctx.user.id,
         acknowledged: 0,
         createdAt: new Date(),
-      })
+      }),
     ),
 });

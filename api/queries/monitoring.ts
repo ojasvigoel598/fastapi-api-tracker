@@ -6,9 +6,14 @@
  * - Aggregated analytics and metrics
  * - Endpoint performance tracking
  * - Alert management
+ *
+ * Every function is scoped to a single `userId` so rows are never shared
+ * across accounts.
  */
 
 import { getDb } from "./connection";
+import { env } from "../lib/env";
+import * as demoStore from "../demo/store";
 import {
   apiRequests,
   endpoints,
@@ -29,11 +34,13 @@ import {
   avg,
   like,
   or,
+  type SQLWrapper,
 } from "drizzle-orm";
+import { getDateBounds, type TimeRange } from "./time-range";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-export type TimeRange = "1h" | "6h" | "24h" | "7d" | "30d";
+export type { TimeRange } from "./time-range";
 
 export interface RequestFilters {
   endpoint?: string;
@@ -54,26 +61,9 @@ export interface PaginationParams {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-function getTimeRangeDate(range: TimeRange): Date {
-  const now = new Date();
-  switch (range) {
-    case "1h":
-      return new Date(now.getTime() - 60 * 60 * 1000);
-    case "6h":
-      return new Date(now.getTime() - 6 * 60 * 60 * 1000);
-    case "24h":
-      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    case "7d":
-      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    case "30d":
-      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    default:
-      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  }
-}
 
-function buildWhereClause(filters: RequestFilters) {
-  const conditions = [];
+function buildWhereClause(filters: RequestFilters, userId: number) {
+  const conditions: (SQLWrapper | undefined)[] = [eq(apiRequests.userId, userId)];
 
   if (filters.endpoint) {
     conditions.push(eq(apiRequests.endpoint, filters.endpoint));
@@ -96,17 +86,17 @@ function buildWhereClause(filters: RequestFilters) {
   }
 
   if (filters.timeRange) {
-    conditions.push(
-      gte(apiRequests.createdAt, getTimeRangeDate(filters.timeRange))
-    );
+    const bounds = getDateBounds(filters.timeRange, filters.startDate, filters.endDate);
+    conditions.push(gte(apiRequests.createdAt, bounds.since));
+    conditions.push(lte(apiRequests.createdAt, bounds.until));
   }
 
   if (filters.search) {
     conditions.push(
       or(
         like(apiRequests.endpoint, `%${filters.search}%`),
-        like(apiRequests.errorMessage || "", `%${filters.search}%`)
-      )
+        like(apiRequests.errorMessage || "", `%${filters.search}%`),
+      ),
     );
   }
 
@@ -119,8 +109,9 @@ function buildWhereClause(filters: RequestFilters) {
  * Create a new API request log entry
  */
 export async function createRequestLog(
-  data: InsertApiRequest
+  data: InsertApiRequest,
 ): Promise<ApiRequest> {
+  if (env.isDemoMode) return demoStore.createRequestLog(data);
   const db = getDb();
   const [result] = await db.insert(apiRequests).values(data).$returningId();
   const log = await db.query.apiRequests.findFirst({
@@ -135,14 +126,15 @@ export async function createRequestLog(
  */
 export async function getRequestLogs(
   filters: RequestFilters = {},
-  pagination: PaginationParams = {}
+  pagination: PaginationParams = {},
+  userId: number,
 ): Promise<{ items: ApiRequest[]; total: number }> {
+  if (env.isDemoMode) return demoStore.requestLogs(filters, pagination, userId);
   const db = getDb();
   const { page = 1, pageSize = 50, sortBy = "createdAt", sortOrder = "desc" } = pagination;
 
-  const where = buildWhereClause(filters);
+  const where = buildWhereClause(filters, userId);
 
-  // Build orderBy
   const orderCol =
     sortBy === "createdAt"
       ? apiRequests.createdAt
@@ -175,12 +167,16 @@ export async function getRequestLogs(
 }
 
 /**
- * Get a single request log by ID
+ * Get a single request log by ID (must belong to the user)
  */
-export async function getRequestLogById(id: number): Promise<ApiRequest | undefined> {
+export async function getRequestLogById(
+  id: number,
+  userId: number,
+): Promise<ApiRequest | undefined> {
+  if (env.isDemoMode) return demoStore.requestLogById(id, userId);
   const db = getDb();
   return db.query.apiRequests.findFirst({
-    where: eq(apiRequests.id, id),
+    where: and(eq(apiRequests.id, id), eq(apiRequests.userId, userId)),
   });
 }
 
@@ -202,16 +198,17 @@ export interface OverviewMetrics {
  * Get high-level KPI metrics for the dashboard overview
  */
 export async function getOverviewMetrics(
-  timeRange: TimeRange = "24h"
+  timeRange: TimeRange = "24h",
+  userId: number,
+  startDate?: Date,
+  endDate?: Date,
 ): Promise<OverviewMetrics> {
+  if (env.isDemoMode) return demoStore.overview(timeRange, userId, startDate, endDate);
   const db = getDb();
-  const since = getTimeRangeDate(timeRange);
-  const now = Date.now();
-  const sinceTime = since.getTime();
-  const duration = now - sinceTime;
-  const previousSince = new Date(sinceTime - duration);
+  const { since, until } = getDateBounds(timeRange, startDate, endDate);
+  const duration = until.getTime() - since.getTime();
+  const previousSince = new Date(since.getTime() - duration);
 
-  // Current period metrics
   const [currentStats] = await db
     .select({
       total: count(),
@@ -219,9 +216,14 @@ export async function getOverviewMetrics(
       avgLatency: avg(apiRequests.latencyMs),
     })
     .from(apiRequests)
-    .where(gte(apiRequests.createdAt, since));
+    .where(
+      and(
+        eq(apiRequests.userId, userId),
+        gte(apiRequests.createdAt, since),
+        lte(apiRequests.createdAt, until),
+      ),
+    );
 
-  // Previous period metrics for comparison
   const [previousStats] = await db
     .select({
       total: count(),
@@ -231,26 +233,37 @@ export async function getOverviewMetrics(
     .from(apiRequests)
     .where(
       and(
+        eq(apiRequests.userId, userId),
         gte(apiRequests.createdAt, previousSince),
-        lte(apiRequests.createdAt, since)
-      )
+        lte(apiRequests.createdAt, since),
+      ),
     );
 
-  // P95 latency
   const latencyRows = await db
     .select({ latency: apiRequests.latencyMs })
     .from(apiRequests)
-    .where(gte(apiRequests.createdAt, since))
+    .where(
+      and(
+        eq(apiRequests.userId, userId),
+        gte(apiRequests.createdAt, since),
+        lte(apiRequests.createdAt, until),
+      ),
+    )
     .orderBy(asc(apiRequests.latencyMs));
 
   const p95Index = Math.floor(latencyRows.length * 0.95);
   const p95Latency = latencyRows[p95Index]?.latency ?? 0;
 
-  // Active endpoints count
   const endpointCount = await db
     .select({ count: sql<number>`COUNT(DISTINCT ${apiRequests.endpoint})` })
     .from(apiRequests)
-    .where(gte(apiRequests.createdAt, since));
+    .where(
+      and(
+        eq(apiRequests.userId, userId),
+        gte(apiRequests.createdAt, since),
+        lte(apiRequests.createdAt, until),
+      ),
+    );
 
   const total = currentStats.total ?? 0;
   const failed = currentStats.failed ?? 0;
@@ -289,10 +302,14 @@ export interface TimeSeriesPoint {
  */
 export async function getRequestTimeSeries(
   timeRange: TimeRange = "24h",
-  groupBy: "minute" | "hour" | "day" = "hour"
+  groupBy: "minute" | "hour" | "day" = "hour",
+  userId: number,
+  startDate?: Date,
+  endDate?: Date,
 ): Promise<TimeSeriesPoint[]> {
+  if (env.isDemoMode) return demoStore.timeSeries(timeRange, groupBy, userId, startDate, endDate);
   const db = getDb();
-  const since = getTimeRangeDate(timeRange);
+  const { since, until } = getDateBounds(timeRange, startDate, endDate);
 
   let formatStr: string;
   switch (groupBy) {
@@ -315,10 +332,12 @@ export async function getRequestTimeSeries(
         SUM(CASE WHEN ${apiRequests.statusCode} >= 400 THEN 1 ELSE 0 END) as failed,
         AVG(${apiRequests.latencyMs}) as avg_latency
       FROM ${apiRequests}
-      WHERE ${apiRequests.createdAt} >= ${since}
+      WHERE ${apiRequests.userId} = ${userId}
+        AND ${apiRequests.createdAt} >= ${since}
+        AND ${apiRequests.createdAt} <= ${until}
       GROUP BY time_bucket
       ORDER BY time_bucket ASC
-    `
+    `,
   );
 
   const rows = (results[0] as unknown as Array<{ time_bucket: string | Date; total: number | string; failed: number | string; avg_latency: number | string }>) ?? [];
@@ -338,35 +357,40 @@ export async function getRequestTimeSeries(
  */
 export async function getOrCreateEndpoint(
   path: string,
-  method: string
+  method: string,
+  userId: number,
 ): Promise<number> {
+  if (env.isDemoMode) return demoStore.getOrCreateEndpoint();
   const db = getDb();
 
   const existing = await db.query.endpoints.findFirst({
-    where: eq(endpoints.path, path),
+    where: and(eq(endpoints.path, path), eq(endpoints.userId, userId)),
   });
 
   if (existing) return existing.id;
 
   const [result] = await db
     .insert(endpoints)
-    .values({ path, method, minLatencyMs: 999999 })
+    .values({ path, method, userId, minLatencyMs: 999999 })
     .$returningId();
 
   return result.id;
 }
 
 /**
- * Get all endpoints with aggregated stats
+ * Get all endpoints with aggregated stats (scoped to the user)
  */
 export async function getEndpoints(
   timeRange: TimeRange = "24h",
-  limit?: number
+  limit: number | undefined,
+  userId: number,
+  startDate?: Date,
+  endDate?: Date,
 ): Promise<Endpoint[]> {
+  if (env.isDemoMode) return demoStore.endpoints(timeRange, limit, userId, startDate, endDate);
   const db = getDb();
-  const since = getTimeRangeDate(timeRange);
+  const { since, until } = getDateBounds(timeRange, startDate, endDate);
 
-  // Rebuild endpoint stats from recent request logs
   const results = await db.execute(
     sql`
       SELECT
@@ -379,11 +403,13 @@ export async function getEndpoints(
         MIN(${apiRequests.latencyMs}) as min_latency,
         MAX(${apiRequests.createdAt}) as last_requested
       FROM ${apiRequests}
-      WHERE ${apiRequests.createdAt} >= ${since}
+      WHERE ${apiRequests.userId} = ${userId}
+        AND ${apiRequests.createdAt} >= ${since}
+        AND ${apiRequests.createdAt} <= ${until}
       GROUP BY ${apiRequests.endpoint}, ${apiRequests.method}
       ORDER BY total_requests DESC
       ${limit ? sql`LIMIT ${limit}` : sql``}
-    `
+    `,
   );
 
   const rows = (results[0] as unknown as Array<{
@@ -445,10 +471,14 @@ export interface StatusCodeDistribution {
 }
 
 export async function getStatusCodeDistribution(
-  timeRange: TimeRange = "24h"
+  timeRange: TimeRange = "24h",
+  userId: number,
+  startDate?: Date,
+  endDate?: Date,
 ): Promise<StatusCodeDistribution[]> {
+  if (env.isDemoMode) return demoStore.statusDistribution(timeRange, userId, startDate, endDate);
   const db = getDb();
-  const since = getTimeRangeDate(timeRange);
+  const { since, until } = getDateBounds(timeRange, startDate, endDate);
 
   const results = await db
     .select({
@@ -456,7 +486,13 @@ export async function getStatusCodeDistribution(
       count: count(),
     })
     .from(apiRequests)
-    .where(gte(apiRequests.createdAt, since))
+    .where(
+      and(
+        eq(apiRequests.userId, userId),
+        gte(apiRequests.createdAt, since),
+        lte(apiRequests.createdAt, until),
+      ),
+    )
     .groupBy(apiRequests.statusCode)
     .orderBy(desc(count()));
 
@@ -478,12 +514,20 @@ export interface LatencyDistribution {
 
 export async function getLatencyDistribution(
   timeRange: TimeRange = "24h",
-  endpoint?: string
+  endpoint: string | undefined,
+  userId: number,
+  startDate?: Date,
+  endDate?: Date,
 ): Promise<LatencyDistribution[]> {
+  if (env.isDemoMode) return demoStore.latencyDistribution(timeRange, endpoint, userId, startDate, endDate);
   const db = getDb();
-  const since = getTimeRangeDate(timeRange);
+  const { since, until } = getDateBounds(timeRange, startDate, endDate);
 
-  const conditions = [gte(apiRequests.createdAt, since)];
+  const conditions = [
+    eq(apiRequests.userId, userId),
+    gte(apiRequests.createdAt, since),
+    lte(apiRequests.createdAt, until),
+  ];
   if (endpoint) {
     conditions.push(eq(apiRequests.endpoint, endpoint));
   }
@@ -504,7 +548,7 @@ export async function getLatencyDistribution(
       WHERE ${and(...conditions)}
       GROUP BY bucket
       ORDER BY MIN(${apiRequests.latencyMs}) ASC
-    `
+    `,
   );
 
   const rows = (results[0] as unknown as Array<{ bucket: string; count: number | string }>) ?? [];
@@ -518,18 +562,20 @@ export async function getLatencyDistribution(
 // ─── Alert Queries ────────────────────────────────────────────────────
 
 /**
- * Get all alerts with optional filtering
+ * Get all alerts with optional filtering (scoped to the user)
  */
 export async function getAlerts(
   filters: {
     severity?: string;
     acknowledged?: boolean;
     type?: string;
-  } = {}
+  } = {},
+  userId: number,
 ): Promise<Alert[]> {
+  if (env.isDemoMode) return demoStore.alertsList(filters, userId);
   const db = getDb();
 
-  const conditions = [];
+  const conditions = [eq(alerts.userId, userId)];
   if (filters.severity) {
     conditions.push(eq(alerts.severity, filters.severity as "critical" | "warning" | "info"));
   }
@@ -540,7 +586,7 @@ export async function getAlerts(
     conditions.push(
       filters.acknowledged
         ? eq(alerts.acknowledged, 1)
-        : eq(alerts.acknowledged, 0)
+        : eq(alerts.acknowledged, 0),
     );
   }
 
@@ -570,6 +616,7 @@ export type Alert = {
  * Create a new alert
  */
 export async function createAlert(data: InsertAlert): Promise<Alert> {
+  if (env.isDemoMode) return demoStore.createAlert(data);
   const db = getDb();
   const [result] = await db.insert(alerts).values(data).$returningId();
   const alert = await db.query.alerts.findFirst({
@@ -580,12 +627,16 @@ export async function createAlert(data: InsertAlert): Promise<Alert> {
 }
 
 /**
- * Acknowledge an alert
+ * Acknowledge an alert (must belong to the user)
  */
 export async function acknowledgeAlert(
   alertId: number,
-  userId: number
+  userId: number,
 ): Promise<void> {
+  if (env.isDemoMode) {
+    demoStore.acknowledge(alertId, userId);
+    return;
+  }
   const db = getDb();
   await db
     .update(alerts)
@@ -594,7 +645,7 @@ export async function acknowledgeAlert(
       acknowledgedBy: userId,
       acknowledgedAt: new Date(),
     })
-    .where(eq(alerts.id, alertId));
+    .where(and(eq(alerts.id, alertId), eq(alerts.userId, userId)));
 }
 
 // ─── Automated Insights ───────────────────────────────────────────────
@@ -612,20 +663,29 @@ export interface AutomatedInsight {
  * Generate automated insights from monitoring data
  */
 export async function generateInsights(
-  timeRange: TimeRange = "1h"
+  timeRange: TimeRange = "1h",
+  userId: number,
+  startDate?: Date,
+  endDate?: Date,
 ): Promise<AutomatedInsight[]> {
+  if (env.isDemoMode) return demoStore.insights(timeRange, userId, startDate, endDate);
   const db = getDb();
-  const since = getTimeRangeDate(timeRange);
+  const { since, until } = getDateBounds(timeRange, startDate, endDate);
   const insights: AutomatedInsight[] = [];
 
-  // 1. Failure rate trends
   const [currentFailures] = await db
     .select({
       total: count(),
       failed: sql<number>`SUM(CASE WHEN ${apiRequests.statusCode} >= 400 THEN 1 ELSE 0 END)`,
     })
     .from(apiRequests)
-    .where(gte(apiRequests.createdAt, since));
+    .where(
+      and(
+        eq(apiRequests.userId, userId),
+        gte(apiRequests.createdAt, since),
+        lte(apiRequests.createdAt, until),
+      ),
+    );
 
   const total = currentFailures.total ?? 0;
   const failed = currentFailures.failed ?? 0;
@@ -634,7 +694,7 @@ export async function generateInsights(
   if (failureRate > 10) {
     insights.push({
       type: "critical",
-      message: `High failure rate detected`,
+      message: "High failure rate detected",
       detail: `${failureRate.toFixed(1)}% of requests failed in the last ${timeRange}`,
       metric: "failureRate",
       changePercent: failureRate,
@@ -642,7 +702,7 @@ export async function generateInsights(
   } else if (failureRate > 5) {
     insights.push({
       type: "warning",
-      message: `Elevated failure rate`,
+      message: "Elevated failure rate",
       detail: `${failureRate.toFixed(1)}% of requests are failing`,
       metric: "failureRate",
       changePercent: failureRate,
@@ -658,12 +718,14 @@ export async function generateInsights(
         MAX(${apiRequests.latencyMs}) as max_latency,
         COUNT(*) as total
       FROM ${apiRequests}
-      WHERE ${apiRequests.createdAt} >= ${since}
+      WHERE ${apiRequests.userId} = ${userId}
+        AND ${apiRequests.createdAt} >= ${since}
+        AND ${apiRequests.createdAt} <= ${until}
       GROUP BY ${apiRequests.endpoint}
       HAVING total >= 5
       ORDER BY avg_latency DESC
       LIMIT 3
-    `
+    `,
   );
 
   const slowRows = (slowResults[0] as unknown as Array<{
@@ -683,7 +745,7 @@ export async function generateInsights(
   if (slowest.length > 0 && slowest[0].avgLatency > 500) {
     insights.push({
       type: slowest[0].avgLatency > 1000 ? "critical" : "warning",
-      message: `Slow endpoint detected`,
+      message: "Slow endpoint detected",
       detail: `${slowest[0].endpoint} averages ${slowest[0].avgLatency.toFixed(0)}ms response time`,
       endpoint: slowest[0].endpoint,
       metric: "avgLatency",
@@ -699,12 +761,14 @@ export async function generateInsights(
         SUM(CASE WHEN ${apiRequests.statusCode} >= 400 THEN 1 ELSE 0 END) as failed,
         (SUM(CASE WHEN ${apiRequests.statusCode} >= 400 THEN 1 ELSE 0 END) / COUNT(*)) * 100 as fail_rate
       FROM ${apiRequests}
-      WHERE ${apiRequests.createdAt} >= ${since}
+      WHERE ${apiRequests.userId} = ${userId}
+        AND ${apiRequests.createdAt} >= ${since}
+        AND ${apiRequests.createdAt} <= ${until}
       GROUP BY ${apiRequests.endpoint}
       HAVING total >= 5
       ORDER BY fail_rate DESC
       LIMIT 3
-    `
+    `,
   );
 
   const failRows = (failResults[0] as unknown as Array<{
@@ -724,7 +788,7 @@ export async function generateInsights(
   if (failing.length > 0 && failing[0].failRate > 20) {
     insights.push({
       type: "critical",
-      message: `Endpoint with high failure rate`,
+      message: "Endpoint with high failure rate",
       detail: `${failing[0].endpoint} has ${failing[0].failRate.toFixed(1)}% failure rate (${failing[0].failed}/${failing[0].total} requests)`,
       endpoint: failing[0].endpoint,
       metric: "failureRate",
@@ -738,16 +802,17 @@ export async function generateInsights(
   const [recentVolume] = await db
     .select({ count: count() })
     .from(apiRequests)
-    .where(gte(apiRequests.createdAt, hourAgo));
+    .where(and(eq(apiRequests.userId, userId), gte(apiRequests.createdAt, hourAgo)));
 
   const [previousVolume] = await db
     .select({ count: count() })
     .from(apiRequests)
     .where(
       and(
+        eq(apiRequests.userId, userId),
         gte(apiRequests.createdAt, twoHoursAgo),
-        lte(apiRequests.createdAt, hourAgo)
-      )
+        lte(apiRequests.createdAt, hourAgo),
+      ),
     );
 
   const recentCount = recentVolume.count ?? 0;
@@ -758,7 +823,7 @@ export async function generateInsights(
     if (changePercent > 50) {
       insights.push({
         type: "info",
-        message: `Request volume spike`,
+        message: "Request volume spike",
         detail: `Traffic increased by ${changePercent.toFixed(0)}% compared to previous hour (${recentCount} vs ${prevCount} requests)`,
         metric: "requestVolume",
         changePercent: Math.round(changePercent * 100) / 100,
@@ -766,7 +831,7 @@ export async function generateInsights(
     } else if (changePercent < -50) {
       insights.push({
         type: "warning",
-        message: `Request volume drop`,
+        message: "Request volume drop",
         detail: `Traffic decreased by ${Math.abs(changePercent).toFixed(0)}% compared to previous hour`,
         metric: "requestVolume",
         changePercent: Math.round(changePercent * 100) / 100,
@@ -781,9 +846,11 @@ export async function generateInsights(
 
 export async function exportRequests(
   filters: RequestFilters,
-  format: "csv" | "json"
+  format: "csv" | "json",
+  userId: number,
 ): Promise<string> {
-  const { items } = await getRequestLogs(filters, { page: 1, pageSize: 10000 });
+  if (env.isDemoMode) return demoStore.exportRequests(filters, format, userId);
+  const { items } = await getRequestLogs(filters, { page: 1, pageSize: 10000 }, userId);
 
   if (format === "json") {
     return JSON.stringify(
@@ -800,11 +867,10 @@ export async function exportRequests(
         userAgent: item.userAgent,
       })),
       null,
-      2
+      2,
     );
   }
 
-  // CSV format
   const headers = [
     "ID",
     "Timestamp",
@@ -825,10 +891,10 @@ export async function exportRequests(
     item.method,
     item.statusCode,
     item.latencyMs,
-    item.errorMessage ? `"${item.errorMessage.replace(/"/g, '""')}"` : "",
+    item.errorMessage ? `"${item.errorMessage.replace(/"/g, '"')}"` : "",
     item.responseSize ?? "",
     item.sourceIp ?? "",
-    item.userAgent ? `"${item.userAgent.replace(/"/g, '""')}"` : "",
+    item.userAgent ? `"${item.userAgent.replace(/"/g, '"')}"` : "",
   ]);
 
   return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
@@ -843,10 +909,14 @@ export interface MethodDistribution {
 }
 
 export async function getMethodDistribution(
-  timeRange: TimeRange = "24h"
+  timeRange: TimeRange = "24h",
+  userId: number,
+  startDate?: Date,
+  endDate?: Date,
 ): Promise<MethodDistribution[]> {
+  if (env.isDemoMode) return demoStore.methodDistribution(timeRange, userId, startDate, endDate);
   const db = getDb();
-  const since = getTimeRangeDate(timeRange);
+  const { since, until } = getDateBounds(timeRange, startDate, endDate);
 
   const results = await db
     .select({
@@ -854,7 +924,13 @@ export async function getMethodDistribution(
       count: count(),
     })
     .from(apiRequests)
-    .where(gte(apiRequests.createdAt, since))
+    .where(
+      and(
+        eq(apiRequests.userId, userId),
+        gte(apiRequests.createdAt, since),
+        lte(apiRequests.createdAt, until),
+      ),
+    )
     .groupBy(apiRequests.method)
     .orderBy(desc(count()));
 

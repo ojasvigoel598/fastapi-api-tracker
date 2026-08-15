@@ -19,13 +19,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Activity,
   AlertTriangle,
   ArrowDownRight,
@@ -41,7 +34,9 @@ import {
   Server,
 } from "lucide-react";
 import { useNavigate } from "react-router";
-import type { TimeRange } from "../../api/queries/monitoring";
+import type { TimeRange } from "../../api/queries/time-range";
+import TimeRangePicker from "@/components/TimeRangePicker";
+import { toTimeRangeQuery } from "@/lib/time-range";
 import {
   AreaChart,
   Area,
@@ -56,14 +51,6 @@ import {
   BarChart,
   Bar,
 } from "recharts";
-
-const TIME_RANGE_OPTIONS: { value: TimeRange; label: string }[] = [
-  { value: "1h", label: "Last Hour" },
-  { value: "6h", label: "Last 6 Hours" },
-  { value: "24h", label: "Last 24 Hours" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "30d", label: "Last 30 Days" },
-];
 
 const STATUS_COLORS: Record<number, string> = {
   200: "#22c55e",
@@ -217,29 +204,35 @@ function InsightCard({
 
 export default function Home() {
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const navigate = useNavigate();
+  const rangeQuery = useMemo(
+    () => toTimeRangeQuery(timeRange, startDate, endDate),
+    [timeRange, startDate, endDate],
+  );
 
   const { data: overview, isLoading: overviewLoading } =
-    trpc.monitoring.overview.useQuery({ timeRange });
+    trpc.monitoring.overview.useQuery(rangeQuery);
 
   const { data: timeSeries, isLoading: timeSeriesLoading } =
-    trpc.monitoring.timeSeries.useQuery({ timeRange, groupBy: "hour" });
+    trpc.monitoring.timeSeries.useQuery({ ...rangeQuery, groupBy: "hour" });
 
   const { data: statusDistribution, isLoading: statusLoading } =
-    trpc.monitoring.statusDistribution.useQuery({ timeRange });
+    trpc.monitoring.statusDistribution.useQuery(rangeQuery);
 
   const { data: latencyDistribution, isLoading: latencyLoading } =
-    trpc.monitoring.latencyDistribution.useQuery({ timeRange });
+    trpc.monitoring.latencyDistribution.useQuery(rangeQuery);
 
   const { data: insights, isLoading: insightsLoading } =
-    trpc.monitoring.insights.useQuery({ timeRange: "1h" });
+    trpc.monitoring.insights.useQuery(rangeQuery);
 
   const { data: alerts } = trpc.monitoring.alerts.useQuery({
     acknowledged: false,
   });
 
   const { data: topEndpoints } = trpc.monitoring.endpoints.useQuery({
-    timeRange,
+    ...rangeQuery,
     limit: 5,
   });
 
@@ -272,24 +265,17 @@ export default function Home() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Real-time overview of your API performance
+              Measured API performance for the selected period
             </p>
           </div>
-          <Select
+          <TimeRangePicker
             value={timeRange}
-            onValueChange={(v) => setTimeRange(v as TimeRange)}
-          >
-            <SelectTrigger className="w-[180px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TIME_RANGE_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={setTimeRange}
+            startDate={startDate}
+            endDate={endDate}
+            onStartDateChange={setStartDate}
+            onEndDateChange={setEndDate}
+          />
         </div>
 
         {/* KPI Cards */}

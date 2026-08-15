@@ -1,121 +1,172 @@
 # API Monitoring & Admin Dashboard
 
-Status: Ongoing / in development. This project may contain bugs, incomplete features, and rough edges. It is being published for progress tracking and continued iteration.
-
-## Overview
-
-This project is a full-stack monitoring dashboard for APIs and auth flows. It includes:
-
-- React + TypeScript frontend built with Vite
-- Hono backend with tRPC endpoints
-- MySQL persistence via Drizzle ORM
-- OAuth login integration with Kimi
-- Monitoring pages for requests, analytics, alerts, and endpoints
-- Admin/auth flows for project users
-
-## Current state
-
-This repository is intentionally being published before the project is fully finished. Some features may be incomplete, unstable, or require additional configuration.
+A full-stack API monitoring dashboard: request logs, analytics charts, endpoints,
+alerts, and AI-assisted insights.
 
 ## Stack
 
 - Frontend: React, Vite, TypeScript, Tailwind CSS, shadcn/ui
 - Backend: Hono, Node.js, tRPC
-- Database: MySQL + Drizzle
-- Auth: Kimi OAuth / JWT session handling
+- Database: MySQL + Drizzle ORM
+- Authentication: **Clerk** (optional) + email/password (local) + optional Supabase Auth
+- AI (optional): Kimi (Moonshot AI)
 
-## Project structure
+## Authentication architecture
 
-```text
-app/
-├── api/                  # Backend API, routers, auth, env, and Hono bootstrap
-├── contracts/            # Shared contract types/constants
-├── db/                  # Database schema and migrations
-├── src/                 # Frontend app and pages
-├── .env.example         # Environment template for required values
-├── .gitignore           # Sensitive and build exclusions
-├── components.json      # shadcn component configuration
-├── drizzle.config.ts    # Drizzle config
-├── eslint.config.js     # Lint config
-├── index.html           # Vite entry
-├── package.json         # Scripts and dependencies
-├── tsconfig*.json       # TypeScript config
-├── vite.config.ts       # Vite configuration
-├── vitest.config.ts     # Test config
-└── README.md            # This file
+Application authentication is **fully separate** from Kimi:
+
+```
+User → Clerk, Supabase, or local email/password → authenticated tRPC/API → Dashboard/DB
+                                      └── optional Kimi (AI only)
 ```
 
-## Prerequisites
+### Clerk authentication
 
-- Node.js 20+
-- npm
-- MySQL database
-- Kimi OAuth credentials / app configuration
+When `CLERK_SECRET_KEY` is configured, the server verifies Clerk bearer
+session tokens with `@clerk/backend` and links the verified Clerk user to the
+local `users` table. The browser uses Clerk's prebuilt React sign-in/sign-up UI
+and attaches the short-lived Clerk token to every tRPC request. Run
+`npm run db:push` after adding the Clerk column to an existing database.
 
-## Setup
+For this Vite app, add these variables in the Keys tab:
 
-1. Copy the sample environment file:
+| Variable | Location | Description |
+| --- | --- | --- |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Browser | Clerk publishable key; this is the Vite equivalent of Clerk's `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. |
+| `CLERK_SECRET_KEY` | Server | Clerk secret key used only for backend token verification and profile lookup. |
 
-```bash
-cp .env.example .env
-```
+Both keys are required to activate Clerk. If they are absent, the existing
+local demo or Supabase path remains active.
 
-2. Fill in the required values in `.env`:
+- **Local mode (default, zero credentials):** real email/password accounts with
+  scrypt-hashed passwords, server-issued session cookies, signup, login, logout,
+  and per-user data isolation — backed by an in-memory demo store.
+- **Clerk mode:** when `CLERK_SECRET_KEY` and `VITE_CLERK_PUBLISHABLE_KEY` are configured,
+  Clerk handles sign-in/sign-up and the backend verifies its bearer tokens.
+- **Supabase mode:** when `SUPABASE_URL` + `SUPABASE_ANON_KEY` +
+  `SUPABASE_JWT_SECRET` are configured, signup/login/password-reset are handled
+  by Supabase Auth. The server verifies the Supabase JWT and issues the same
+  application session cookie.
+- **Kimi** is never required to sign in. It only powers the optional AI analysis
+  endpoint and has three states: `not_connected`, `mock` (deterministic, no API
+  calls), and `real` (only when you configure `KIMI_OPEN_URL` + `KIMI_API_KEY`).
 
-- `APP_ID`
-- `APP_SECRET`
-- `DATABASE_URL`
-- `KIMI_AUTH_URL`
-- `KIMI_OPEN_URL`
-- `OWNER_UNION_ID`
-- `VITE_KIMI_AUTH_URL`
-- `VITE_APP_ID`
+Every monitoring route is authenticated and scoped to the signed-in user, so one
+account can never read or modify another account's requests, alerts, or metrics.
 
-3. Install dependencies:
+## Zero-credential local demo
+
+No API keys, no database, no external services required:
 
 ```bash
 npm install
+npm run dev     # http://localhost:3000
 ```
 
-4. Run the development server:
+Open the app and either **create an account** or sign in with the seeded demo
+account:
+
+- email: `demo@example.com`
+- password: `demo1234`
+
+Each new account gets its own seeded monitoring dataset, so multi-user isolation
+is exercised offline. Kimi runs in mock mode automatically. Data resets on every
+restart.
+
+## Environment variables
+
+Create a `.env` file (see the table). Nothing is required to start the app —
+with no variables set it runs the zero-credential local demo.
+
+### Required for production
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes (production) | MySQL connection string (Drizzle / `mysql2`). When unset the app runs in demo mode. |
+| `APP_SECRET` | Yes (production) | Secret used to sign the application session cookie (HS256). Use a long random value. |
+
+After changing the schema, run `npm run db:push` (or `db:generate` + `db:migrate`)
+against your production database.
+
+### Optional — Clerk Auth
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Optional | Browser-safe Clerk publishable key for this Vite app. |
+| `CLERK_SECRET_KEY` | Optional | Server-only Clerk secret key. |
+
+### Optional — Supabase Auth
+
+Set **all three** to switch application authentication to Supabase:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `SUPABASE_URL` | Optional | Your Supabase project URL. |
+| `SUPABASE_ANON_KEY` | Optional | Supabase publishable anon key (safe for the browser). |
+| `SUPABASE_JWT_SECRET` | Optional | Supabase project JWT secret (server-side only). |
+| `VITE_SUPABASE_URL` | Optional | Browser-exposed copy of `SUPABASE_URL` (public). |
+| `VITE_SUPABASE_ANON_KEY` | Optional | Browser-exposed copy of `SUPABASE_ANON_KEY` (public). |
+| `OWNER_EMAIL` | Optional | Email granted the `admin` role on sign-in. |
+
+Supabase's free plan includes 50,000 monthly active users, a 500 MB database,
+and unlimited API requests — no credit card required.
+
+### Optional — Kimi (AI only)
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `KIMI_OPEN_URL` | Optional | Kimi Open API origin. When set together with the key, real AI analysis is enabled. |
+| `KIMI_API_KEY` | Optional | Server-side Kimi API key. Never exposed to the browser. |
+
+Without these, Kimi reports `not_connected` (or `mock` in demo mode) and the
+core application is unaffected.
+
+## Scripts
 
 ```bash
-npm run dev
-```
-
-5. Build the app:
-
-```bash
-npm run build
+npm run dev          # Vite dev server + Hono API (http://localhost:3000)
+npm run build        # vite build + bundle the API (dist/)
+npm run start        # run the production server (node dist/boot.js)
+npm test             # vitest (offline, no external services)
+npm run lint         # eslint
+npm run check        # tsc -b
+npm run db:push      # push the Drizzle schema to MySQL
+npm run db:seed      # seed the first user (or SEED_USER_ID=<id>) with demo telemetry
 ```
 
 ## Database setup
 
-This project expects a MySQL database and uses Drizzle for schema management:
-
 ```bash
 npm run db:generate
 npm run db:migrate
-```
-
-You may also use:
-
-```bash
+# or
 npm run db:push
+npm run db:seed                  # requires at least one application user
+SEED_USER_ID=123 npm run db:seed # target a specific existing user
 ```
 
-## Notes on secrets and publishing
+The SQL seed script always assigns rows to an existing application user. It
+fails closed when no user exists, rather than creating rows with an unusable
+`user_id=0` that no authenticated account could read.
 
-- Do not commit a real `.env` file.
-- Keep `.env` values local only.
-- Only `.env.example` should be tracked, with placeholder values.
-- Review the repo diff before pushing to verify no API keys, tokens, or credentials remain.
+## Project structure
 
-## Development notes
+```text
+├── api/                  # Hono bootstrap, tRPC routers, auth, queries, demo store
+├── contracts/            # Shared constants and errors
+├── db/                   # Drizzle schema, relations, seed script
+├── src/                  # React frontend (pages, components, providers)
+├── drizzle.config.ts     # Drizzle config
+├── vite.config.ts        # Vite config
+├── vitest.config.ts      # Test config
+└── package.json          # Scripts and dependencies
+```
 
-This project was published as a working snapshot for continued development. Expect bugs, missing polish, or partial implementations while it is being iterated on.
+## Security notes
 
-## License
-
-No explicit license file is included at this time. If you intend to publish this publicly, confirm the appropriate license before distribution.
-
+- Never commit a real `.env` file — `.env*` is gitignored.
+- Server secrets (`APP_SECRET`, `CLERK_SECRET_KEY`, `SUPABASE_JWT_SECRET`, `KIMI_API_KEY`) are
+  server-only and never placed in `VITE_*` variables.
+- Only intentionally public values (`VITE_CLERK_PUBLISHABLE_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`)
+  are exposed to the browser.
+- Authentication and authorization are enforced server-side in every route.
