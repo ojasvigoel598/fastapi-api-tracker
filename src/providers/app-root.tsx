@@ -5,6 +5,7 @@ import {
 } from "@clerk/clerk-react";
 import { TRPCProvider } from "@/providers/trpc";
 import { AuthActionsProvider } from "@/providers/auth-actions";
+import { getSessionToken } from "@/lib/session-token";
 import App from "@/App";
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as
@@ -14,7 +15,7 @@ const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as
 function LocalApp() {
   return (
     <AuthActionsProvider>
-      <TRPCProvider>
+      <TRPCProvider getToken={async () => getSessionToken()}>
         <App />
       </TRPCProvider>
     </AuthActionsProvider>

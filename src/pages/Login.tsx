@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/providers/trpc";
 import { createSupabaseClient } from "@/lib/supabase";
+import { setSessionToken } from "@/lib/session-token";
+import { OpenInTabButton } from "@/components/OpenInTabButton";
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as
   | string
@@ -74,7 +76,13 @@ export default function Login() {
         if (data.session) {
           return supabaseLogin.mutate(
             { accessToken: data.session.access_token },
-            { onError: (err) => setError(err.message) },
+            {
+              onError: (err) => setError(err.message),
+              onSuccess: (res) => {
+                setSessionToken(res.token);
+                window.location.href = "/";
+              },
+            },
           );
         }
         return setNotice(
@@ -85,7 +93,10 @@ export default function Login() {
         { email, password, name: name || undefined },
         {
           onError: (err) => setError(err.message),
-          onSuccess: () => (window.location.href = "/"),
+          onSuccess: (res) => {
+            setSessionToken(res.token);
+            window.location.href = "/";
+          },
         },
       );
       return;
@@ -100,14 +111,23 @@ export default function Login() {
       if (supErr) return setError(supErr.message);
       return supabaseLogin.mutate(
         { accessToken: data.session.access_token },
-        { onError: (err) => setError(err.message) },
+        {
+          onError: (err) => setError(err.message),
+          onSuccess: (res) => {
+            setSessionToken(res.token);
+            window.location.href = "/";
+          },
+        },
       );
     }
     login.mutate(
       { email, password },
       {
         onError: (err) => setError(err.message),
-        onSuccess: () => (window.location.href = "/"),
+        onSuccess: (res) => {
+          setSessionToken(res.token);
+          window.location.href = "/";
+        },
       },
     );
   }
@@ -192,6 +212,9 @@ export default function Login() {
               ? "Sign in to your API monitoring dashboard."
               : "Start monitoring your APIs in minutes."}
           </CardDescription>
+          <div className="flex justify-center pt-2">
+            <OpenInTabButton />
+          </div>
         </CardHeader>
 
         <CardContent>

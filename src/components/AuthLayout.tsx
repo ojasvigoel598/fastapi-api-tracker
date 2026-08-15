@@ -32,11 +32,13 @@ import {
   Gauge,
   Moon,
   Sun,
+  ExternalLink,
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useState, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { AuthLayoutSkeleton } from "./AuthLayoutSkeleton";
 import { Button } from "./ui/button";
+import { OpenInTabButton, openInNewTab } from "./OpenInTabButton";
 
 type MenuItem = {
   icon: React.ElementType;
@@ -125,6 +127,7 @@ export default function AuthLayout({
           >
             Sign in
           </Button>
+          <OpenInTabButton variant="ghost" size="sm" className="w-full" />
         </div>
       </div>
     );
@@ -292,6 +295,16 @@ function AuthLayoutContent({
                 )}
                 <span className="group-data-[collapsible=icon]:hidden text-sm">
                   {theme === "dark" ? "Light Mode" : "Dark Mode"}
+                </span>
+              </button>
+              <button
+                onClick={() => openInNewTab()}
+                title="Open this page in a new browser tab"
+                className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring mb-1"
+              >
+                <ExternalLink className="h-4 w-4 shrink-0" />
+                <span className="group-data-[collapsible=icon]:hidden text-sm">
+                  Open in tab
                 </span>
               </button>
               <DropdownMenu>

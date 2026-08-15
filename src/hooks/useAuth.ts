@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { LOGIN_PATH } from "@/const";
 import { useAuthActions } from "@/providers/auth-actions-context";
+import { setSessionToken } from "@/lib/session-token";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
@@ -36,6 +37,7 @@ export function useAuth(options?: UseAuthOptions) {
   });
 
   const logout = useCallback(async () => {
+    setSessionToken(null);
     await logoutMutation.mutateAsync();
     await clerkSignOut?.();
   }, [clerkSignOut, logoutMutation]);
