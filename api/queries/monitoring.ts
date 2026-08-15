@@ -46,6 +46,9 @@ export interface RequestFilters {
   endpoint?: string;
   method?: string;
   statusCode?: number;
+  // Inclusive status-code bounds (e.g. minStatusCode: 400 → failures only).
+  minStatusCode?: number;
+  maxStatusCode?: number;
   startDate?: Date;
   endDate?: Date;
   search?: string;
@@ -75,6 +78,14 @@ function buildWhereClause(filters: RequestFilters, userId: number) {
 
   if (filters.statusCode) {
     conditions.push(eq(apiRequests.statusCode, filters.statusCode));
+  }
+
+  if (filters.minStatusCode !== undefined) {
+    conditions.push(gte(apiRequests.statusCode, filters.minStatusCode));
+  }
+
+  if (filters.maxStatusCode !== undefined) {
+    conditions.push(lte(apiRequests.statusCode, filters.maxStatusCode));
   }
 
   if (filters.startDate) {

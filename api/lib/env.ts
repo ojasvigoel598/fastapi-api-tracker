@@ -59,4 +59,9 @@ export const env = {
   // ─── Kimi (OPTIONAL — AI features only, never required to sign in) ────
   kimiOpenUrl: required("KIMI_OPEN_URL"),
   kimiApiKey: required("KIMI_API_KEY"),
+
+  // ─── Email notifications (OPTIONAL — usage-limit alerts) ──────────────
+  resendApiKey: required("RESEND_API_KEY"),
+  resendFrom: required("RESEND_FROM"),
+  appUrl: required("APP_URL"),
 };

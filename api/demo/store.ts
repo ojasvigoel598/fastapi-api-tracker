@@ -15,11 +15,26 @@ import type {
   ApiRequest,
   InsertAlert,
   InsertApiRequest,
+  UsageAlert,
+  UsageLimit,
   User,
 } from "@db/schema";
 import type { NewUserInput } from "../queries/users";
 import { hashPassword } from "../auth/password";
 import { getDateBounds } from "../queries/time-range";
+import {
+  periodStart,
+  dailyPeriodKey,
+  monthlyPeriodKey,
+} from "../lib/usage-periods";
+import {
+  evaluateThresholds,
+  evaluateResets,
+  toWithUsage,
+  type ThresholdOutcome,
+  type UsedCounts,
+  type UsageLimitWithUsage,
+} from "../lib/limits";
 import type {
   AutomatedInsight,
   Endpoint,
@@ -111,10 +126,31 @@ export const DEMO_USER = {
 let users: User[] = [];
 let requests: ApiRequest[] = [];
 let alerts: Alert[] = [];
+let limits: UsageLimit[] = [];
+let usageAlerts: UsageAlert[] = [];
 let nextUserId = 1;
 let nextRequestId = 1;
 let nextAlertId = 1;
+let nextLimitId = 1;
+let nextUsageAlertId = 1;
 let seeded = false;
+
+// Serializes rate-limit check-and-record per (user, endpoint, method) so
+// concurrent requests cannot race past the hard limit in demo mode.
+const limitMutexes = new Map<string, Promise<void>>();
+
+async function withLimitLock<T>(key: string, fn: () => T | Promise<T>): Promise<T> {
+  const prev = limitMutexes.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  limitMutexes.set(key, prev.then(() => gate));
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -212,6 +248,8 @@ function seedRequestsForUser(userId: number, count: number): void {
       responseSize: statusCode < 400 ? randomInt(100, 50000) : randomInt(50, 500),
       sourceIp: SOURCE_IPS[randomInt(0, SOURCE_IPS.length - 1)],
       userAgent: USER_AGENTS[randomInt(0, USER_AGENTS.length - 1)],
+      cost: 0,
+      blocked: 0,
       createdAt,
     });
   }
@@ -287,9 +325,14 @@ function seed(): void {
   users = [];
   requests = [];
   alerts = [];
+  limits = [];
+  usageAlerts = [];
   nextUserId = 1;
   nextRequestId = 1;
   nextAlertId = 1;
+  nextLimitId = 1;
+  nextUsageAlertId = 1;
+  limitMutexes.clear();
 
   const { salt, hash } = hashPassword(DEMO_USER.password);
   const demoUser: User = {
@@ -334,6 +377,10 @@ function matches(filters: RequestFilters, r: ApiRequest): boolean {
   if (filters.endpoint && r.endpoint !== filters.endpoint) return false;
   if (filters.method && r.method !== filters.method) return false;
   if (filters.statusCode && r.statusCode !== filters.statusCode) return false;
+  if (filters.minStatusCode !== undefined && r.statusCode < filters.minStatusCode)
+    return false;
+  if (filters.maxStatusCode !== undefined && r.statusCode > filters.maxStatusCode)
+    return false;
   if (filters.startDate && r.createdAt.getTime() < new Date(String(filters.startDate)).getTime())
     return false;
   if (filters.endDate && r.createdAt.getTime() > new Date(String(filters.endDate)).getTime())
@@ -543,6 +590,8 @@ export function createRequestLog(data: InsertApiRequest): ApiRequest {
     responseSize: data.responseSize ?? null,
     sourceIp: data.sourceIp ?? null,
     userAgent: data.userAgent ?? null,
+    cost: data.cost ?? 0,
+    blocked: data.blocked ?? 0,
     createdAt: data.createdAt ?? new Date(),
   };
   requests.unshift(request);
@@ -979,12 +1028,304 @@ export function exportRequests(
   return [headers.join(","), ...body.map((row) => row.join(","))].join("\n");
 }
 
+// ─── Usage Limits ─────────────────────────────────────────────────────
+
+function findLimit(
+  userId: number,
+  endpoint: string,
+  method: string,
+): UsageLimit | undefined {
+  return limits.find(
+    (l) => l.userId === userId && l.endpoint === endpoint && l.method === method,
+  );
+}
+
+export function computeUsed(
+  userId: number,
+  endpoint: string,
+  method: string,
+  now: Date,
+): UsedCounts {
+  ensureSeeded();
+  const dayStart = periodStart("daily", now).getTime();
+  const monthStart = periodStart("monthly", now).getTime();
+  const nowMs = now.getTime();
+  let daily = 0;
+  let monthly = 0;
+  let cost = 0;
+  for (const r of requests) {
+    if (
+      r.userId !== userId ||
+      r.endpoint !== endpoint ||
+      r.method !== method ||
+      r.blocked
+    )
+      continue;
+    const t = r.createdAt.getTime();
+    if (t >= monthStart && t <= nowMs) {
+      monthly += 1;
+      cost += r.cost;
+      if (t >= dayStart) daily += 1;
+    }
+  }
+  return { daily, monthly, cost };
+}
+
+export function listUsageLimits(userId: number): UsageLimitWithUsage[] {
+  ensureSeeded();
+  const now = new Date();
+  return limits
+    .filter((l) => l.userId === userId)
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    .map((l) => toWithUsage(l, computeUsed(userId, l.endpoint, l.method, now), now));
+}
+
+export function getUsageLimit(
+  userId: number,
+  endpoint: string,
+  method: string,
+): UsageLimitWithUsage | null {
+  ensureSeeded();
+  const limit = findLimit(userId, endpoint, method);
+  if (!limit) return null;
+  const now = new Date();
+  return toWithUsage(limit, computeUsed(userId, endpoint, method, now), now);
+}
+
+export function saveUsageLimit(
+  userId: number,
+  endpoint: string,
+  method: string,
+  config: {
+    dailyLimit: number | null;
+    monthlyLimit: number | null;
+    costLimit: number | null;
+    warningThreshold: number;
+    criticalThreshold: number;
+    emailAlerts: boolean;
+    rateLimiting: boolean;
+  },
+): UsageLimitWithUsage {
+  ensureSeeded();
+  const now = new Date();
+  const existing = findLimit(userId, endpoint, method);
+  if (existing) {
+    existing.dailyLimit = config.dailyLimit;
+    existing.monthlyLimit = config.monthlyLimit;
+    existing.costLimit = config.costLimit;
+    existing.warningThreshold = config.warningThreshold;
+    existing.criticalThreshold = config.criticalThreshold;
+    existing.emailAlerts = config.emailAlerts ? 1 : 0;
+    existing.rateLimiting = config.rateLimiting ? 1 : 0;
+    existing.updatedAt = now;
+    return toWithUsage(existing, computeUsed(userId, endpoint, method, now), now);
+  }
+
+  const limit: UsageLimit = {
+    id: nextLimitId++,
+    userId,
+    endpoint,
+    method,
+    dailyLimit: config.dailyLimit,
+    monthlyLimit: config.monthlyLimit,
+    costLimit: config.costLimit,
+    warningThreshold: config.warningThreshold,
+    criticalThreshold: config.criticalThreshold,
+    emailAlerts: config.emailAlerts ? 1 : 0,
+    rateLimiting: config.rateLimiting ? 1 : 0,
+    lastDailyPeriodKey: null,
+    lastMonthlyPeriodKey: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  limits.push(limit);
+  return toWithUsage(limit, computeUsed(userId, endpoint, method, now), now);
+}
+
+export function deleteUsageLimit(
+  userId: number,
+  endpoint: string,
+  method: string,
+): void {
+  ensureSeeded();
+  limits = limits.filter(
+    (l) => !(l.userId === userId && l.endpoint === endpoint && l.method === method),
+  );
+}
+
+function recordUsageOutcome(
+  userId: number,
+  limit: UsageLimit,
+  outcome: ThresholdOutcome,
+  now: Date,
+): UsageAlert | null {
+  const key = outcome.period === "daily" ? dailyPeriodKey(now) : monthlyPeriodKey(now);
+  const duplicate = usageAlerts.find(
+    (a) =>
+      a.limitId === limit.id &&
+      a.period === outcome.period &&
+      a.severity === outcome.severity &&
+      a.periodKey === key,
+  );
+  if (duplicate) return null;
+
+  const alert: UsageAlert = {
+    id: nextUsageAlertId++,
+    userId,
+    limitId: limit.id,
+    endpoint: limit.endpoint,
+    method: limit.method,
+    period: outcome.period,
+    severity: outcome.severity,
+    periodKey: key,
+    message: outcome.message,
+    details: outcome.details ?? null,
+    emailed: 0,
+    createdAt: new Date(),
+  };
+  usageAlerts.unshift(alert);
+  return alert;
+}
+
+export function createUsageAlert(
+  userId: number,
+  limit: UsageLimit,
+  outcome: ThresholdOutcome,
+  key: string,
+): UsageAlert | null {
+  ensureSeeded();
+  const duplicate = usageAlerts.find(
+    (a) =>
+      a.limitId === limit.id &&
+      a.period === outcome.period &&
+      a.severity === outcome.severity &&
+      a.periodKey === key,
+  );
+  if (duplicate) return null;
+
+  const alert: UsageAlert = {
+    id: nextUsageAlertId++,
+    userId,
+    limitId: limit.id,
+    endpoint: limit.endpoint,
+    method: limit.method,
+    period: outcome.period,
+    severity: outcome.severity,
+    periodKey: key,
+    message: outcome.message,
+    details: outcome.details ?? null,
+    emailed: 0,
+    createdAt: new Date(),
+  };
+  usageAlerts.unshift(alert);
+  return alert;
+}
+
+export function updatePeriodKeys(
+  limitId: number,
+  dailyKey: string,
+  monthlyKey: string,
+): void {
+  ensureSeeded();
+  const limit = limits.find((l) => l.id === limitId);
+  if (limit) {
+    limit.lastDailyPeriodKey = dailyKey;
+    limit.lastMonthlyPeriodKey = monthlyKey;
+  }
+}
+
+export function listUsageAlerts(userId: number): UsageAlert[] {
+  ensureSeeded();
+  return usageAlerts
+    .filter((a) => a.userId === userId)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+}
+
+export async function enforceAndRecord(
+  userId: number,
+  payload: {
+    endpoint: string;
+    method: string;
+    statusCode: number;
+    latencyMs: number;
+    cost?: number;
+    errorMessage?: string | null;
+    requestHeaders?: Record<string, string> | null;
+    responseSize?: number | null;
+    sourceIp?: string | null;
+    userAgent?: string | null;
+    createdAt?: Date;
+  },
+  now: Date,
+): Promise<{
+  allowed: boolean;
+  request: ApiRequest;
+  alerts: UsageAlert[];
+  limit: UsageLimitWithUsage | null;
+}> {
+  ensureSeeded();
+  const createdAt = payload.createdAt ?? now;
+  const key = `${userId}:${payload.endpoint}:${payload.method}`;
+
+  return withLimitLock(key, () => {
+    const limit = findLimit(userId, payload.endpoint, payload.method);
+    let allowed = true;
+    if (limit && limit.rateLimiting === 1) {
+      const used = computeUsed(userId, payload.endpoint, payload.method, now);
+      const exhausted =
+        (limit.dailyLimit !== null && used.daily >= limit.dailyLimit) ||
+        (limit.monthlyLimit !== null && used.monthly >= limit.monthlyLimit) ||
+        (limit.costLimit !== null && used.cost >= limit.costLimit);
+      if (exhausted) allowed = false;
+    }
+
+    const request: ApiRequest = {
+      id: nextRequestId++,
+      userId,
+      endpoint: payload.endpoint,
+      method: payload.method,
+      statusCode: allowed ? payload.statusCode : 429,
+      latencyMs: allowed ? payload.latencyMs : 0,
+      errorMessage: allowed ? payload.errorMessage ?? null : "Rate limit exceeded",
+      requestHeaders: payload.requestHeaders ?? null,
+      responseSize: allowed ? payload.responseSize ?? null : null,
+      sourceIp: payload.sourceIp ?? null,
+      userAgent: payload.userAgent ?? null,
+      cost: allowed ? payload.cost ?? 0 : 0,
+      blocked: allowed ? 0 : 1,
+      createdAt,
+    };
+    requests.unshift(request);
+
+    const createdAlerts: UsageAlert[] = [];
+    let limitWithUsage: UsageLimitWithUsage | null = null;
+    if (limit) {
+      const used = computeUsed(userId, payload.endpoint, payload.method, now);
+      const outcomes = [
+        ...evaluateResets(limit, now),
+        ...evaluateThresholds(limit, used, now),
+      ];
+      for (const outcome of outcomes) {
+        const alert = recordUsageOutcome(userId, limit, outcome, now);
+        if (alert) createdAlerts.push(alert);
+      }
+      limit.lastDailyPeriodKey = dailyPeriodKey(now);
+      limit.lastMonthlyPeriodKey = monthlyPeriodKey(now);
+      limitWithUsage = toWithUsage(limit, used, now);
+    }
+
+    return { allowed, request, alerts: createdAlerts, limit: limitWithUsage };
+  });
+}
+
 // ─── Lifecycle helpers (used by the seed router) ──────────────────────
 
 export function clear(userId: number): void {
   ensureSeeded();
   requests = requests.filter((r) => r.userId !== userId);
   alerts = alerts.filter((a) => a.userId !== userId);
+  limits = limits.filter((l) => l.userId !== userId);
+  usageAlerts = usageAlerts.filter((a) => a.userId !== userId);
 }
 
 export function reseed(userId: number): void {
