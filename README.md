@@ -40,7 +40,10 @@ local demo or Supabase path remains active.
 
 - **Local mode (default, zero credentials):** real email/password accounts with
   scrypt-hashed passwords, server-issued session cookies, signup, login, logout,
-  and per-user data isolation — backed by an in-memory demo store.
+  and per-user data isolation — backed by an in-memory demo store. The server
+  also returns the signed session token in the login response, which the client
+  mirrors and sends back as an `Authorization: Bearer` header so the session
+  survives preview proxies that strip or rewrite `Set-Cookie` headers.
 - **Clerk mode:** when `CLERK_SECRET_KEY` and `VITE_CLERK_PUBLISHABLE_KEY` are configured,
   Clerk handles sign-in/sign-up and the backend verifies its bearer tokens.
 - **Supabase mode:** when `SUPABASE_URL` + `SUPABASE_ANON_KEY` +
@@ -148,6 +151,30 @@ works as soon as the process comes back up.
   backoff** (1s → 2s → 4s … capped at 30s), then reconnects automatically when
   the backend returns — no manual refresh required.
 
+### Sign-in across the preview iframe and tabs
+
+Sign-in no longer depends on a single cookie. On login the server:
+
+1. Sets an httpOnly `app_sid` cookie whose flags match the request context:
+   - `SameSite=Lax` for same-origin / top-level tab access (the common case).
+   - `SameSite=None` only for a genuine cross-site iframe.
+   - `Secure` only when the request actually arrives over HTTPS
+     (`x-forwarded-proto: https`). Marking a cookie `Secure` while serving over
+     plain HTTP makes browsers silently drop it — the original cause of the
+     "sign in, then immediately back to sign-in" loop.
+   - It never uses the `Partitioned` (CHIPS) attribute, which scopes a cookie to
+     the embedding top-level site and makes it disappear when the app is opened
+     in its own tab.
+2. Also returns the signed session token in the login response body. The client
+   stores it and sends it as `Authorization: Bearer <token>` on every request,
+   so the session survives preview proxies that strip or rewrite `Set-Cookie`
+   headers.
+
+An **“Open in tab”** control (on the login screen, the sign-in prompt, and the
+sidebar) opens the app in a fresh browser tab — escaping the preview iframe
+where third-party cookie/storage partitioning can otherwise interfere with the
+session.
+
 ### Data persistence across restarts
 
 - **Demo mode** (no `DATABASE_URL`): data lives in memory and is re-seeded on
@@ -177,6 +204,37 @@ The SQL seed script always assigns rows to an existing application user. It
 fails closed when no user exists, rather than creating rows with an unusable
 `user_id=0` that no authenticated account could read.
 
+## Proof / Verification
+
+Verified against the live Freebuff preview on 2026-08-15. The sandbox runs in
+zero-credential demo mode (no `DATABASE_URL`), so the seeded demo account is
+`demo@example.com` / `demo1234`. The preview URL is ephemeral (it changes per
+sandbox); the one used below was
+`https://3000-0008bce4-0e49-48b5-a7a9-9fa3418ea097.daytonaproxy01.net`.
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | Typecheck — `npm run check` | ✅ passed (no errors) |
+| 2 | Test suite — `npm test` | ✅ 25 passed (3 files) |
+| 3 | Readiness probe — `GET /api/health` | ✅ `200` `{"ok":true,"mode":"demo"}` |
+| 4 | Sign in — `POST /api/trpc/auth.login` | ✅ `200`, `set-cookie: app_sid=…; HttpOnly; Secure; SameSite=Lax`, body contains the signed `token` |
+| 5 | Session via cookie — `GET /api/trpc/auth.me` | ✅ `200`, returns `demo@example.com` |
+| 6 | Session via bearer token (no cookie) — `GET /api/trpc/auth.me` with `Authorization: Bearer <token>` | ✅ `200`, returns `demo@example.com` |
+| 7 | Frontend serves — `GET /` | ✅ Vite dev `index.html` with `/src/main.tsx` |
+
+The automated suite additionally covers (offline, no external services): the
+login → session-cookie → `auth.me` flow, bearer-token authentication, multi-user
+data isolation, `/api/ingest` telemetry, the failure-history endpoint (30
+failures by default with pagination), and usage-limit thresholds, resets,
+duplicate-alert suppression, and hard-limit enforcement.
+
+**Screenshots** were not captured in this environment because the sandbox has no
+browser tooling, and the managed preview proxy is controlled by Freebuff (it
+recycles the sandbox independently of this repository). To reproduce visually:
+run `npm install && npm run dev`, open `http://localhost:3000`, sign in with the
+demo account, and confirm the Dashboard shows the KPI cards, charts, alerts, and
+recent failures.
+
 ## Project structure
 
 ```text
@@ -198,3 +256,7 @@ fails closed when no user exists, rather than creating rows with an unusable
 - Only intentionally public values (`VITE_CLERK_PUBLISHABLE_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`)
   are exposed to the browser.
 - Authentication and authorization are enforced server-side in every route.
+- The client mirrors the signed session token in `localStorage` and sends it as
+  an `Authorization: Bearer` header. This is a signed HS256 JWT (not a raw
+  credential) and is only meaningful alongside the rest of the session; the
+  httpOnly cookie remains the primary channel when it is available.

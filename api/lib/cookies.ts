@@ -3,38 +3,46 @@ export type SessionCookieOptions = {
   path: string;
   sameSite: "Lax" | "None";
   secure: boolean;
-  partitioned: boolean;
 };
 
-function isLocalhost(headers: Headers): boolean {
-  const host = headers.get("host") || "";
-  return host.startsWith("localhost:") || host.startsWith("127.0.0.1:");
-}
-
+/**
+ * Work out cookie flags that survive every context the app runs in:
+ *
+ * - localhost dev over plain HTTP: SameSite=Lax, not Secure
+ * - hosted preview / production over HTTPS: SameSite=Lax, Secure
+ * - a genuine cross-site iframe (the hosted preview pane): SameSite=None,
+ *   Secure — a *regular* (non-partitioned) cookie so the same session also
+ *   follows the app when it is opened in its own tab.
+ *
+ * We deliberately never set the `Partitioned` (CHIPS) attribute. A partitioned
+ * cookie is scoped to the embedding top-level site, so the moment a user opens
+ * the app in a new tab (or the preview pane's top-level origin changes) the
+ * cookie disappears and the browser bounces straight back to sign-in.
+ *
+ * `Secure` is derived from the actual client-facing protocol (`x-forwarded-proto`)
+ * instead of the hostname. Marking a cookie `Secure` while serving over plain
+ * HTTP makes browsers silently drop it — which reproduces exactly the
+ * "sign in, then immediately back to sign-in" loop. When the protocol is
+ * unknown we err on the side of *not* setting Secure, since a non-Secure
+ * cookie still works over HTTPS, whereas a Secure cookie over HTTP is dropped.
+ */
 export function getSessionCookieOptions(headers: Headers): SessionCookieOptions {
-  const localhost = isLocalhost(headers);
   const forwardedProto = (headers.get("x-forwarded-proto") || "")
     .split(",")[0]
     .trim()
     .toLowerCase();
 
-  const secure = forwardedProto === "https" || !localhost;
+  const secure = forwardedProto === "https";
 
-  // `Sec-Fetch-Site` tells us whether the browser made this request from a
-  // cross-site context (an iframe embedded on a different site, e.g. a hosted
-  // preview pane). Only there is SameSite=None required. A Partitioned cookie
-  // (CHIPS) must only be set in that cross-site context; applying it to a
-  // same-origin/top-level navigation can make browsers drop the cookie and
-  // cause a sign-in loop, so we keep it scoped to the cross-site case only.
   const secFetchSite = (headers.get("sec-fetch-site") || "").toLowerCase();
-
   if (secFetchSite === "cross-site") {
+    // SameSite=None is required for a cookie to be sent from a cross-site
+    // iframe, and browsers require Secure alongside it.
     return {
       httpOnly: true,
       path: "/",
       sameSite: "None",
       secure: true,
-      partitioned: true,
     };
   }
 
@@ -43,6 +51,5 @@ export function getSessionCookieOptions(headers: Headers): SessionCookieOptions 
     path: "/",
     sameSite: "Lax",
     secure,
-    partitioned: false,
   };
 }

@@ -94,8 +94,7 @@ describe("app router", () => {
     const { getSessionCookieOptions } = await import("./lib/cookies");
 
     // Same-origin / top-level tab access (the common localhost + preview tab
-    // case) must never set SameSite=None or Partitioned, which can make
-    // browsers drop the cookie and cause a sign-in loop.
+    // case) must be a plain first-party cookie.
     const sameOrigin = getSessionCookieOptions(
       new Headers({
         host: "app.daytonaproxy01.net",
@@ -105,10 +104,11 @@ describe("app router", () => {
     );
     expect(sameOrigin.sameSite).toBe("Lax");
     expect(sameOrigin.secure).toBe(true);
-    expect(sameOrigin.partitioned).toBe(false);
 
     // A genuine cross-site iframe (the hosted preview pane) requires
-    // SameSite=None so the cookie is sent on the cross-site fetch.
+    // SameSite=None so the cookie is sent on the cross-site fetch, but it must
+    // NOT be Partitioned — a partitioned cookie vanishes when the app is
+    // opened in its own tab, which reproduces the sign-in loop.
     const crossSite = getSessionCookieOptions(
       new Headers({
         host: "app.daytonaproxy01.net",
@@ -118,7 +118,6 @@ describe("app router", () => {
     );
     expect(crossSite.sameSite).toBe("None");
     expect(crossSite.secure).toBe(true);
-    expect(crossSite.partitioned).toBe(true);
 
     // Plain localhost dev over HTTP must not mark the cookie Secure.
     const localhost = getSessionCookieOptions(
@@ -126,7 +125,15 @@ describe("app router", () => {
     );
     expect(localhost.sameSite).toBe("Lax");
     expect(localhost.secure).toBe(false);
-    expect(localhost.partitioned).toBe(false);
+
+    // A non-localhost host served over plain HTTP (no forwarded-proto) must
+    // NOT be marked Secure — a Secure cookie over HTTP is silently dropped by
+    // browsers, which is what previously caused the preview sign-in loop.
+    const plainHttp = getSessionCookieOptions(
+      new Headers({ host: "preview.internal:3000" }),
+    );
+    expect(plainHttp.sameSite).toBe("Lax");
+    expect(plainHttp.secure).toBe(false);
   });
 
   it("hashes and verifies passwords", async () => {
@@ -144,8 +151,9 @@ describe("app router", () => {
       password: "password123",
       name: "Alice",
     });
-    expect(signup.email).toBe("auth@example.com");
-    expect((signup as Record<string, unknown>).passwordHash).toBeUndefined();
+    expect(signup.user.email).toBe("auth@example.com");
+    expect(signup.token).toBeTruthy();
+    expect((signup.user as Record<string, unknown>).passwordHash).toBeUndefined();
 
     // The session cookie is now persisted on the session.
     const authed = await s.reload();
@@ -163,7 +171,8 @@ describe("app router", () => {
       email: "auth@example.com",
       password: "password123",
     });
-    expect(login.email).toBe("auth@example.com");
+    expect(login.user.email).toBe("auth@example.com");
+    expect(login.token).toBeTruthy();
   });
 
   it("rejects invalid credentials and duplicate emails", async () => {
@@ -319,5 +328,43 @@ describe("app router", () => {
     const analysis = await authed.kimi.analyze();
     expect(analysis.state).toBe("mock");
     expect(analysis.analysis).toContain("API monitoring data");
+  });
+
+  it("authenticates via the bearer session token when no cookie is present", async () => {
+    const { default: app } = await import("./boot");
+
+    const loginRes = await app.request("/api/trpc/auth.login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        json: { email: "demo@example.com", password: "demo1234" },
+      }),
+    });
+    expect(loginRes.status).toBe(200);
+    const loginBody = (await loginRes.json()) as {
+      result: { data: { json: { token: string } } };
+    };
+    const token = loginBody.result.data.json.token;
+    expect(typeof token).toBe("string");
+    expect(token.length).toBeGreaterThan(20);
+
+    // No cookie — only the bearer token. This is the path the client takes
+    // when a hosted preview proxy strips or rewrites the Set-Cookie header.
+    const meRes = await app.request("/api/trpc/auth.me", {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(meRes.status).toBe(200);
+    const meBody = (await meRes.json()) as {
+      result: { data: { json: { email: string } } };
+    };
+    expect(meBody.result.data.json.email).toBe("demo@example.com");
+
+    // A garbage bearer token must not authenticate.
+    const badRes = await app.request("/api/trpc/auth.me", {
+      method: "GET",
+      headers: { authorization: "Bearer not-a-real-token" },
+    });
+    expect(badRes.status).toBe(401);
   });
 });

@@ -40,7 +40,6 @@ function setSessionCookie(ctx: TrpcContext, token: string): void {
       path: opts.path,
       sameSite: opts.sameSite.toLowerCase() as "lax" | "none",
       secure: opts.secure,
-      partitioned: opts.partitioned,
       maxAge: Session.maxAgeMs / 1000,
     }),
   );
@@ -55,16 +54,30 @@ function clearSessionCookie(ctx: TrpcContext): void {
       path: opts.path,
       sameSite: opts.sameSite.toLowerCase() as "lax" | "none",
       secure: opts.secure,
-      partitioned: opts.partitioned,
       maxAge: 0,
     }),
   );
 }
 
-async function issueSession(ctx: TrpcContext, user: User): Promise<PublicUser> {
+export type SessionIssueResult = {
+  user: PublicUser;
+  token: string;
+};
+
+/**
+ * Issue the application session: an httpOnly cookie for normal requests plus
+ * the signed token itself in the response body. The client stores the token
+ * and sends it as `Authorization: Bearer <token>` on later requests, so the
+ * session survives proxies that strip or rewrite `Set-Cookie` headers (the
+ * cause of the hosted-preview sign-in loop).
+ */
+async function issueSession(
+  ctx: TrpcContext,
+  user: User,
+): Promise<SessionIssueResult> {
   const token = await signSessionToken({ userId: user.id, email: user.email });
   setSessionCookie(ctx, token);
-  return toPublicUser(user);
+  return { user: toPublicUser(user), token };
 }
 
 export const authRouter = createRouter({
