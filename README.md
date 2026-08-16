@@ -146,6 +146,7 @@ npm run check        # tsc -b
 npm run db:generate  # generate a new migration from db/schema.ts (offline)
 npm run db:migrate   # apply committed migrations (db/migrations/*) to MySQL
 npm run db:push      # push the Drizzle schema directly to MySQL
+npm run db:verify    # run real Drizzle queries against MySQL to prove the prod data path
 npm run db:seed      # seed the first user (or SEED_USER_ID=<id>) with demo telemetry
 ```
 
@@ -249,7 +250,7 @@ sandbox); the one used below was
 | # | Check | Result |
 | --- | --- | --- |
 | 1 | Typecheck — `npm run check` | ✅ passed (no errors) |
-| 2 | Test suite — `npm test` | ✅ 25 passed (3 files) |
+| 2 | Test suite — `npm test` | ✅ 36 passed (6 files) |
 | 3 | Readiness probe — `GET /api/health` | ✅ `200` `{"ok":true,"mode":"demo"}` |
 | 4 | Sign in — `POST /api/trpc/auth.login` | ✅ `200`, `set-cookie: app_sid=…; HttpOnly; Secure; SameSite=Lax`, body contains the signed `token` |
 | 5 | Session via cookie — `GET /api/trpc/auth.me` | ✅ `200`, returns `demo@example.com` |
