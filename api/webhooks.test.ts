@@ -205,4 +205,68 @@ describe("webhook API keys", () => {
     );
     expect(badBatch.status).toBe(400);
   });
+
+  it("exercises the full webhook flow over HTTP (login → key → ingest → query)", async () => {
+    // Boot the real app (boot.ts wiring: body guard, /api/trpc, webhook
+    // route) and drive everything through app.request — this is the same
+    // surface a real API gateway hits.
+    const { default: app } = await import("./boot");
+
+    const loginRes = await app.request("/api/trpc/auth.login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        json: { email: "demo@example.com", password: "demo1234" },
+      }),
+    });
+    expect(loginRes.status).toBe(200);
+    const loginBody = (await loginRes.json()) as {
+      result: { data: { json: { token: string } } };
+    };
+    const token = loginBody.result.data.json.token;
+
+    const keyRes = await app.request("/api/trpc/webhooks.createKey", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ json: { name: "HTTP e2e gateway" } }),
+    });
+    expect(keyRes.status).toBe(200);
+    const keyBody = (await keyRes.json()) as {
+      result: { data: { json: { key: string } } };
+    };
+    const key = keyBody.result.data.json.key;
+
+    const ingestRes = await app.request("/api/webhook/ingest", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        endpoint: "/http-e2e-webhook",
+        method: "POST",
+        statusCode: 201,
+        latencyMs: 25,
+      }),
+    });
+    expect(ingestRes.status).toBe(201);
+
+    // The recorded row must be visible through the signed-in monitoring query.
+    const input = encodeURIComponent(
+      JSON.stringify({ json: { filters: { endpoint: "/http-e2e-webhook" } } }),
+    );
+    const queryRes = await app.request(
+      `/api/trpc/monitoring.requests?input=${input}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    expect(queryRes.status).toBe(200);
+    const queryBody = (await queryRes.json()) as {
+      result: { data: { json: { total: number; items: { latencyMs: number }[] } } };
+    };
+    expect(queryBody.result.data.json.total).toBe(1);
+    expect(queryBody.result.data.json.items[0]?.latencyMs).toBe(25);
+  });
 });
