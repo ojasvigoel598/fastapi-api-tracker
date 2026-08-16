@@ -56,6 +56,43 @@ jobs:
             if (res.status !== 200) process.exit(1);
           "
 
+  # Real-MySQL end-to-end: applies the Drizzle migrations against a genuine
+  # MySQL 8 server, then boots the app on DATABASE_URL and drives it through
+  # the exact @trpc/client stack the frontend uses (register → seed → overview
+  # percentiles → webhook key → ingest → verify rows persisted). Catches bugs
+  # the demo-store unit tests cannot, e.g. SQL that only runs in MySQL mode.
+  mysql-e2e:
+    name: Real-MySQL end-to-end (migrate → register → seed → webhook → persist)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: app
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run real-MySQL end-to-end harness
+        run: MYSQL_E2E_URL="mysql://root:root@127.0.0.1:3306/app" npm run db:e2e
+
   # Build the production image and publish it to GHCR on every push to
   # main. This is also the live build of the Dockerfile — if the multi-stage
   # Dockerfile breaks, the deploy job fails even before any hosting is wired.
