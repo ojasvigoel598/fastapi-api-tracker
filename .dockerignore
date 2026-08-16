@@ -1,5 +1,12 @@
 node_modules
 dist
 .git
+.github
+.freebuff
+.env
+.env.*
+!.env.example
 *.swp
 *.log
+Dockerfile
+docker-compose.yml

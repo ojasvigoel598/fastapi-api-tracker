@@ -1,0 +1,96 @@
+# One-command production stack: MySQL 8 + schema migration + the API
+# Monitor app. Usage:
+#
+#   docker compose up --build
+#
+# The app is then available at http://localhost:3000 (override with PORT).
+# Set MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD / APP_SECRET in a .env file for
+# anything other than local development (see README "Docker" section).
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: api_monitor
+      MYSQL_USER: api_monitor
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-api_monitor_dev}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_dev_only}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "127.0.0.1",
+          "-u",
+          "root",
+          "-p$$MYSQL_ROOT_PASSWORD",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: apply the Drizzle migrations, then exit. The app only starts
+  # after this service completes successfully.
+  migrate:
+    build:
+      context: .
+      target: build
+    environment:
+      DATABASE_URL: mysql://api_monitor:${MYSQL_PASSWORD:-api_monitor_dev}@mysql:3306/api_monitor
+    command: npx drizzle-kit migrate
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # Optional one-shot seed of the owner admin account (OWNER_EMAIL /
+  # OWNER_PASSWORD) and demo dataset. Uncomment to enable:
+  # seed:
+  #   build:
+  #     context: .
+  #     target: build
+  #   environment:
+  #     DATABASE_URL: mysql://api_monitor:${MYSQL_PASSWORD:-api_monitor_dev}@mysql:3306/api_monitor
+  #     OWNER_EMAIL: ${OWNER_EMAIL:-}
+  #     OWNER_PASSWORD: ${OWNER_PASSWORD:-}
+  #   command: npx tsx db/seed.ts
+  #   depends_on:
+  #     migrate:
+  #       condition: service_completed_successfully
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: mysql://api_monitor:${MYSQL_PASSWORD:-api_monitor_dev}@mysql:3306/api_monitor
+      # Required in production. CHANGE THIS — a weak secret lets attackers
+      # forge sessions.
+      APP_SECRET: ${APP_SECRET:-change-me-to-a-long-random-secret}
+      # Optional integrations (see README):
+      # OWNER_EMAIL: ${OWNER_EMAIL:-}
+      # OWNER_PASSWORD: ${OWNER_PASSWORD:-}
+      # RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # RESEND_FROM: ${RESEND_FROM:-}
+      # APP_URL: ${APP_URL:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  mysql_data:
