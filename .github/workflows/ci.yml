@@ -38,6 +38,11 @@ jobs:
       - name: Build (vite + esbuild API bundle)
         run: npm run build
 
+      - name: Build Vercel output + smoke-test the serverless function
+        run: |
+          npm run build:vercel
+          node scripts/vercel-smoke.mjs
+
       - name: Smoke-test the production bundle
         run: |
           # Import the built bundle and exercise it in-process (no server
