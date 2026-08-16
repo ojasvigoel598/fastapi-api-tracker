@@ -104,10 +104,64 @@ The runtime image ships only production dependencies and the built bundle; a
 commented-out `seed` service in `docker-compose.yml` can optionally provision the
 owner admin account (`OWNER_EMAIL` / `OWNER_PASSWORD`).
 
+## Deploy to Vercel
+
+This repo ships a **Vercel Build Output API** deployment (`vercel.json` +
+`scripts/vercel-build.mjs`): `npm run build:vercel` builds the SPA, bundles the
+whole Hono API into one catch-all serverless function (`.vercel/output`), and
+routes `/api/*` to it with the original path preserved. The root `api/` source
+directory would otherwise collide with Vercel's convention that every file
+there becomes its own function — the Build Output API avoids that entirely.
+
+**Option A — Git import (recommended):** push this repo to GitHub, then in
+Vercel choose *Import Project → fastapi-api-tracker*. Vercel detects
+`vercel.json` and runs `npm run build:vercel` on every push/PR; previews are
+created for every PR automatically.
+
+**Option B — CLI:**
+
+```bash
+npm i -g vercel
+vercel deploy
+```
+
+### Environment variables
+
+Set these in the Vercel project dashboard (**Production** environment):
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `DEMO_MODE=true` | *or* the two below | Runs the app fully in-memory with the seeded demo data — no database needed. Ideal for a live portfolio demo. In-memory data is per-function-instance and resets on cold starts. |
+| `DATABASE_URL` | *or* `DEMO_MODE=true` | External MySQL connection string (Drizzle / `mysql2`). Vercel does not host MySQL — use any MySQL provider and enable connection pooling for serverless. |
+| `APP_SECRET` | Yes (unless demo) | Long random value; signs the session cookie and tokens. |
+| `OWNER_EMAIL` / `OWNER_PASSWORD` | Optional | Seeds an admin account. |
+| `VITE_CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY` | Optional | Clerk auth. |
+| `SUPABASE_URL` + `SUPABASE_ANON_KEY` + `SUPABASE_JWT_SECRET` | Optional | Supabase auth. |
+| `KIMI_OPEN_URL` + `KIMI_API_KEY` | Optional | Real AI insights. |
+
+With no `DATABASE_URL`, set `DEMO_MODE=true` — otherwise production fail-closes
+with a clear error. Demo mode also runs with `NODE_ENV=production` (previously
+demo was local-only), which is exactly what a no-database Vercel deployment
+needs.
+
+### How it works on Vercel
+
+- **Static:** `dist/public` is served by Vercel's CDN with an `index.html`
+  fallback for SPA client-side routes (`/login`, `/webhooks`, …).
+- **API:** every `/api/*` request (tRPC, health, ingest, webhook) is handled by
+the single Node.js 22 serverless function; the original URL path is restored
+inside `api/vercel.ts` before it reaches Hono.
+- `boot.ts` detects Vercel (`VERCEL=1`) and skips starting a long-lived server
+  and static file mounting.
+- CI builds and smoke-tests the serverless function on every push
+  (`scripts/vercel-smoke.mjs`), so a broken Vercel output fails the build
+  before you ever deploy.
+
 ## Continuous integration (GitHub Actions)
 
 `.github/workflows/ci.yml` runs on every push and PR:
-`npm ci` → `tsc -b` → eslint → vitest → production build → smoke-boot of the
+`npm ci` → `tsc -b` → eslint → vitest → production build → **Vercel output
+build + serverless-function smoke test** → in-process smoke-boot of the
 production bundle. GitHub runs it automatically on this repository.
 
 ## Zero-credential local demo
@@ -192,6 +246,7 @@ core application is unaffected.
 ```bash
 npm run dev          # Vite dev server + Hono API (http://localhost:3000)
 npm run build        # vite build + bundle the API (dist/)
+npm run build:vercel # npm run build + assemble .vercel/output (Vercel deploy)
 npm run start        # run the production server (node dist/boot.js)
 npm test             # vitest (offline, no external services)
 npm run lint         # eslint
@@ -303,7 +358,7 @@ sandbox); the one used below was
 | # | Check | Result |
 | --- | --- | --- |
 | 1 | Typecheck — `npm run check` | ✅ passed (no errors) |
-| 2 | Test suite — `npm test` | ✅ 41 passed (7 files) |
+| 2 | Test suite — `npm test` | ✅ 47 passed (8 files) |
 | 3 | Readiness probe — `GET /api/health` | ✅ `200` `{"ok":true,"mode":"demo"}` |
 | 4 | Sign in — `POST /api/trpc/auth.login` | ✅ `200`, `set-cookie: app_sid=…; HttpOnly; Secure; SameSite=Lax`, body contains the signed `token` |
 | 5 | Session via cookie — `GET /api/trpc/auth.me` | ✅ `200`, returns `demo@example.com` |
@@ -332,11 +387,13 @@ recent failures.
 
 ```text
 ├── api/                  # Hono bootstrap, tRPC routers, auth, queries, demo store
+│   └── vercel.ts         # Vercel serverless entry (path reconstruction)
 ├── contracts/            # Shared constants and errors
 ├── db/                   # Drizzle schema, relations, seed script
-├── scripts/              # start-preview.sh (boot-time dev-server supervisor)
+├── scripts/              # start-preview.sh, vercel-build.mjs, vercel-smoke.mjs
 ├── src/                  # React frontend (pages, components, providers)
 ├── drizzle.config.ts     # Drizzle config
+├── vercel.json           # Vercel build config (Build Output API)
 ├── vite.config.ts        # Vite config
 ├── vitest.config.ts      # Test config
 └── package.json          # Scripts and dependencies
