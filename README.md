@@ -1,5 +1,7 @@
 # API Monitoring & Admin Dashboard
 
+![CI](https://github.com/ojasvigoel598/fastapi-api-tracker/actions/workflows/ci.yml/badge.svg)
+
 A full-stack API monitoring dashboard: request logs, analytics charts, endpoints,
 alerts, and AI-assisted insights.
 
