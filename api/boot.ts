@@ -5,6 +5,7 @@ import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
 import { handleIngest, handleCheckLimit } from "./ingest";
+import { handleWebhookIngest } from "./webhook";
 
 if (env.isDemoMode) {
   console.warn(
@@ -37,6 +38,12 @@ app.use(async (c, next) => {
 
 app.post("/api/ingest", (c) => handleIngest(c.req.raw));
 app.get("/api/check-limit", (c) => handleCheckLimit(c.req.raw));
+
+/**
+ * Real-time telemetry webhook — key-authenticated, no session required.
+ * Accepts a single event or a batch; see api/webhook.ts for the contract.
+ */
+app.post("/api/webhook/ingest", (c) => handleWebhookIngest(c.req.raw));
 
 /**
  * Readiness probe — no auth, no database, no external calls.
