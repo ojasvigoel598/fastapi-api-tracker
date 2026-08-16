@@ -256,10 +256,10 @@ export async function getOverviewMetrics(
   // constant memory, works at any volume.
   const p95Results = await db.execute(
     sql`
-      SELECT MIN(${apiRequests.latencyMs}) AS p95
+      SELECT MIN(latency_ms) AS p95
       FROM (
         SELECT
-          ${apiRequests.latencyMs},
+          ${apiRequests.latencyMs} AS latency_ms,
           ROW_NUMBER() OVER (ORDER BY ${apiRequests.latencyMs}) AS rn,
           COUNT(*) OVER () AS n
         FROM ${apiRequests}
