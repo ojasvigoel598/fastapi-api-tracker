@@ -228,11 +228,15 @@ export default function Home() {
     [timeRange, startDate, endDate],
   );
 
+  // Poll so telemetry pushed through the webhook (/api/webhook/ingest) or
+  // POST /api/ingest shows up on the dashboard without a manual refresh.
+  const live = { refetchInterval: 10_000 } as const;
+
   const { data: overview, isLoading: overviewLoading } =
-    trpc.monitoring.overview.useQuery(rangeQuery);
+    trpc.monitoring.overview.useQuery(rangeQuery, live);
 
   const { data: timeSeries, isLoading: timeSeriesLoading } =
-    trpc.monitoring.timeSeries.useQuery({ ...rangeQuery, groupBy: "hour" });
+    trpc.monitoring.timeSeries.useQuery({ ...rangeQuery, groupBy: "hour" }, live);
 
   const { data: statusDistribution, isLoading: statusLoading } =
     trpc.monitoring.statusDistribution.useQuery(rangeQuery);
@@ -243,9 +247,10 @@ export default function Home() {
   const { data: insights, isLoading: insightsLoading } =
     trpc.monitoring.insights.useQuery(rangeQuery);
 
-  const { data: alerts } = trpc.monitoring.alerts.useQuery({
-    acknowledged: false,
-  });
+  const { data: alerts } = trpc.monitoring.alerts.useQuery(
+    { acknowledged: false },
+    live,
+  );
 
   const { data: topEndpoints } = trpc.monitoring.endpoints.useQuery({
     ...rangeQuery,
