@@ -19,16 +19,17 @@ const DEMO_SESSION_SECRET =
   "local-demo-only-session-secret-do-not-use-in-production";
 
 const isProduction = process.env.NODE_ENV === "production";
+const forceDemo = process.env.DEMO_MODE === "true";
 const databaseUrl = required("DATABASE_URL");
 const supabaseUrl = required("SUPABASE_URL");
 const supabaseAnonKey = required("SUPABASE_ANON_KEY");
 const supabaseJwtSecret = required("SUPABASE_JWT_SECRET");
 const clerkSecretKey = required("CLERK_SECRET_KEY");
 
-if (isProduction && !databaseUrl) {
-  throw new Error("DATABASE_URL is required in production; demo mode is local-only");
+if (isProduction && !forceDemo && !databaseUrl) {
+  throw new Error("DATABASE_URL is required in production; set DEMO_MODE=true to run the in-memory demo in production");
 }
-if (isProduction && !required("APP_SECRET")) {
+if (isProduction && !forceDemo && !required("APP_SECRET")) {
   throw new Error("APP_SECRET is required in production");
 }
 
@@ -36,11 +37,13 @@ export const env = {
   isProduction,
   databaseUrl,
   /**
-   * Demo mode is active when DATABASE_URL is unset (or DEMO_MODE=true).
+   * Demo mode is active when DATABASE_URL is unset or DEMO_MODE=true.
    * The app then serves seeded in-memory data instead of MySQL and uses a
-   * local email/password auth backed by the in-memory store.
+   * local email/password auth backed by the in-memory store. DEMO_MODE=true
+   * works even with NODE_ENV=production so a hosted (e.g. Vercel) demo
+   * deployment can run without a database.
    */
-  isDemoMode: !isProduction && (process.env.DEMO_MODE === "true" || !databaseUrl),
+  isDemoMode: forceDemo || (!isProduction && !databaseUrl),
 
   /**
    * Clerk Auth is enabled when the server secret is configured. The browser
@@ -57,7 +60,9 @@ export const env = {
   supabaseJwtSecret,
 
   /** Signs the application session cookie. */
-  sessionSecret: required("APP_SECRET") || (!isProduction ? supabaseJwtSecret || DEMO_SESSION_SECRET : ""),
+  sessionSecret:
+    required("APP_SECRET") ||
+    (forceDemo ? DEMO_SESSION_SECRET : !isProduction ? supabaseJwtSecret || DEMO_SESSION_SECRET : ""),
 
   /** Optional: email of the deployment owner (granted the admin role). */
   ownerEmail: (process.env.OWNER_EMAIL ?? "").toLowerCase(),

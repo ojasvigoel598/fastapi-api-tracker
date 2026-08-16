@@ -9,7 +9,7 @@ import { handleWebhookIngest } from "./webhook";
 
 if (env.isDemoMode) {
   console.warn(
-    "[demo] LOCAL DEMO MODE — DATABASE_URL is not configured. " +
+    "[demo] DEMO MODE — DATABASE_URL is not configured. " +
       "Serving seeded in-memory data with local email/password accounts. " +
       "Configure DATABASE_URL (and optionally Supabase) for production.",
   );
@@ -72,7 +72,11 @@ app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 export default app;
 
-if (env.isProduction) {
+// Run a long-lived Node server locally (and in Docker). On Vercel the app is
+// served as a serverless function (api/vercel.ts) — Vercel sets `VERCEL` and
+// serves static assets from its CDN, so skip both `serve()` and static file
+// mounting there.
+if (env.isProduction && !process.env.VERCEL) {
   const { serve } = await import("@hono/node-server");
   const { serveStaticFiles } = await import("./lib/vite");
   serveStaticFiles(app);
