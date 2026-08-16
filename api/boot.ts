@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import type { HttpBindings } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
@@ -17,7 +16,24 @@ if (env.isDemoMode) {
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
-app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
+/**
+ * Reject oversized request bodies without touching the body stream.
+ *
+ * Hono's `bodyLimit` middleware reconstructs the request with
+ * `new Request(c.req.raw, ...)` for chunked / no-content-length bodies,
+ * which crashes on Node 24 (`Cannot read private member #state`) and turns
+ * any bodyless POST (e.g. `auth.logout`) into a 500. This header-based
+ * guard keeps the 50 MB cap for the common case while never consuming or
+ * rebuilding the stream.
+ */
+const MAX_BODY_BYTES = 50 * 1024 * 1024;
+app.use(async (c, next) => {
+  const contentLength = Number(c.req.header("content-length") ?? 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return c.json({ error: "Payload Too Large" }, 413);
+  }
+  return next();
+});
 
 app.post("/api/ingest", (c) => handleIngest(c.req.raw));
 app.get("/api/check-limit", (c) => handleCheckLimit(c.req.raw));
