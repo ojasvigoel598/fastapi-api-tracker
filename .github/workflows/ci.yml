@@ -38,11 +38,15 @@ jobs:
       - name: Build (vite + esbuild API bundle)
         run: npm run build
 
-      - name: Verify production bundle boots
+      - name: Smoke-test the production bundle
         run: |
-          # Boot the production bundle in demo mode to prove `npm start` is runnable.
-          DEMO_MODE=true APP_SECRET="${{ secrets.APP_SECRET }}" timeout 10 node dist/boot.js &
-          PID=$!
-          sleep 3
-          curl -fsS --max-time 5 http://localhost:3000/api/health || { kill $PID 2>/dev/null; exit 1; }
-          kill $PID 2>/dev/null || true
+          # Import the built bundle and exercise it in-process (no server
+          # process, no database): boot.ts only calls serve() under
+          # NODE_ENV=production, which would require a real DATABASE_URL.
+          node --input-type=module -e "
+            const { default: app } = await import('./dist/boot.js');
+            const res = await app.fetch(new Request('http://localhost:3000/api/health'));
+            const body = await res.json();
+            console.log('smoke: /api/health ' + res.status + ' mode=' + body.mode);
+            if (res.status !== 200) process.exit(1);
+          "
