@@ -102,7 +102,12 @@ export const apiRequests = mysqlTable(
     cost: float("cost").notNull().default(0),
     // 1 when the request was rejected by rate limiting (not real usage).
     blocked: int("blocked").notNull().default(0),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // fsp 6 (microseconds) so freshly-inserted rows are never rounded into the
+    // "future". With fsp 0, MySQL rounds e.g. 21:57:25.9 to 21:57:26, and the
+    // app's own `created_at <= now` queries then treat the brand-new row as one
+    // second in the future — it becomes invisible to overview/timeSeries/rate
+    // limits until the clock ticks past the rounded value.
+    createdAt: timestamp("created_at", { fsp: 6 }).defaultNow().notNull(),
   },
   (table) => ({
     userIdIdx: index("api_requests_user_idx").on(table.userId),
