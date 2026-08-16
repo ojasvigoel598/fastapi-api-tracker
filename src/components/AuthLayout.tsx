@@ -30,6 +30,7 @@ import {
   Globe,
   Bell,
   Gauge,
+  Webhook,
   Moon,
   Sun,
   ExternalLink,
@@ -54,6 +55,7 @@ const menuItems: MenuItem[] = [
   { icon: Globe, label: "Endpoints", path: "/endpoints" },
   { icon: Bell, label: "Alerts", path: "/alerts" },
   { icon: Gauge, label: "Limits", path: "/limits" },
+  { icon: Webhook, label: "Webhooks", path: "/webhooks" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";

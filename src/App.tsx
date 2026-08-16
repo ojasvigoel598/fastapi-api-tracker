@@ -5,6 +5,7 @@ import AnalyticsPage from "./pages/Analytics";
 import EndpointsPage from "./pages/Endpoints";
 import AlertsPage from "./pages/Alerts";
 import LimitsPage from "./pages/Limits";
+import WebhooksPage from "./pages/Webhooks";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import ReconnectBanner from "./components/ReconnectBanner";
@@ -20,6 +21,7 @@ export default function App() {
       <Route path="/endpoints" element={<EndpointsPage />} />
       <Route path="/alerts" element={<AlertsPage />} />
       <Route path="/limits" element={<LimitsPage />} />
+      <Route path="/webhooks" element={<WebhooksPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="*" element={<NotFound />} />
       </Routes>
