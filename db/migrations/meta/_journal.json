@@ -8,6 +8,13 @@
       "when": 1786830825747,
       "tag": "0000_concerned_hobgoblin",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1786884682081,
+      "tag": "0001_needy_nomad",
+      "breakpoints": true
     }
   ]
 }

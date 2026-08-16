@@ -3,7 +3,7 @@ import { Session } from "@contracts/constants";
 import { authenticateRequest } from "./context";
 import { enforceAndRecord, getUsageLimit } from "./queries/usage";
 
-const ingestSchema = z.object({
+export const ingestSchema = z.object({
   endpoint: z.string().trim().min(1).max(500),
   method: z.string().trim().min(1).max(10).transform((value) => value.toUpperCase()),
   statusCode: z.number().int().min(100).max(599),
@@ -14,7 +14,7 @@ const ingestSchema = z.object({
   cost: z.number().min(0).optional(),
 });
 
-function json(body: unknown, status = 200): Response {
+export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },

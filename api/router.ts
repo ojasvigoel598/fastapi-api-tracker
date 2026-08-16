@@ -3,6 +3,7 @@ import { monitoringRouter } from "./monitoring-router";
 import { seedRouter } from "./seed-router";
 import { kimiRouter } from "./kimi-router";
 import { limitsRouter } from "./limits-router";
+import { webhooksRouter } from "./webhooks-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -12,6 +13,7 @@ export const appRouter = createRouter({
   seed: seedRouter,
   kimi: kimiRouter,
   limits: limitsRouter,
+  webhooks: webhooksRouter,
 });
 
 export type AppRouter = typeof appRouter;

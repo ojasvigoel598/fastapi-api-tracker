@@ -1,0 +1,208 @@
+import { describe, expect, it } from "vitest";
+
+// Same isolated env as app.test.ts — the offline suite must never depend
+// on local credentials.
+process.env.NODE_ENV = "test";
+process.env.DEMO_MODE = "true";
+process.env.DATABASE_URL = "";
+process.env.APP_SECRET = "unit-test-secret-key-that-is-long-enough-for-hs256";
+process.env.OWNER_EMAIL = "";
+process.env.OWNER_PASSWORD = "";
+process.env.CLERK_SECRET_KEY = "";
+process.env.SUPABASE_URL = "";
+process.env.SUPABASE_ANON_KEY = "";
+process.env.SUPABASE_JWT_SECRET = "";
+process.env.KIMI_OPEN_URL = "";
+process.env.KIMI_API_KEY = "";
+
+type Caller = ReturnType<
+  Awaited<typeof import("./router")>["appRouter"]["createCaller"]
+>;
+
+// The demo store is module-level, so every test needs a distinct account.
+let emailCounter = 0;
+
+async function newAuthedCaller(): Promise<Caller> {
+  const { appRouter } = await import("./router");
+  const { authenticateRequest } = await import("./context");
+
+  emailCounter += 1;
+  let cookieHeader = "";
+  const resHeaders = new Headers();
+
+  async function build(): Promise<Caller> {
+    const headers = new Headers();
+    if (cookieHeader) headers.set("cookie", cookieHeader);
+    const user = await authenticateRequest(headers);
+    return appRouter.createCaller({
+      req: new Request("http://localhost/api/trpc", { headers }),
+      resHeaders,
+      user,
+    });
+  }
+
+  const caller = await build();
+  await caller.auth.register({
+    email: `webhooks${emailCounter}@example.com`,
+    password: "password123",
+  });
+  const setCookie = resHeaders.get("set-cookie");
+  const match = setCookie?.match(/app_sid=([^;]*)/);
+  if (match?.[1]) cookieHeader = `app_sid=${match[1]}`;
+  return build();
+}
+
+describe("webhook API keys", () => {
+  it("creates a key, lists it, and never reveals it again", async () => {
+    const caller = await newAuthedCaller();
+
+    const created = await caller.webhooks.createKey({ name: "Gateway A" });
+    expect(created.key.startsWith("apk_")).toBe(true);
+    expect(created.key.length).toBeGreaterThan(20);
+    expect(created.record.name).toBe("Gateway A");
+    expect(created.record.keyHint).toBe(created.key.slice(-4));
+
+    const list = await caller.webhooks.listKeys();
+    expect(list.length).toBe(1);
+    // Only the hint is stored/returned, never the full key.
+    expect(list[0]?.keyHint).toBe(created.record.keyHint);
+    expect(JSON.stringify(list)).not.toContain(created.key);
+  });
+
+  it("records telemetry through the webhook with a bearer key", async () => {
+    const { handleWebhookIngest } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key } = await caller.webhooks.createKey({ name: "Gateway B" });
+
+    const response = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+          "user-agent": "webhook-test-client",
+        },
+        body: JSON.stringify({
+          endpoint: "/webhook-created",
+          method: "post",
+          statusCode: 202,
+          latencyMs: 77,
+          responseSize: 256,
+        }),
+      }),
+    );
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as { ok: boolean; received: unknown[] };
+    expect(body.ok).toBe(true);
+    expect(body.received.length).toBe(1);
+
+    const logs = await caller.monitoring.requests({
+      filters: { endpoint: "/webhook-created" },
+    });
+    expect(logs.total).toBe(1);
+    expect(logs.items[0]?.statusCode).toBe(202);
+    expect(logs.items[0]?.latencyMs).toBe(77);
+  });
+
+  it("accepts a batch of events in a single request", async () => {
+    const { handleWebhookIngest } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key } = await caller.webhooks.createKey({ name: "Batch" });
+
+    const response = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          events: [
+            { endpoint: "/batch-1", method: "GET", statusCode: 200, latencyMs: 10 },
+            { endpoint: "/batch-2", method: "POST", statusCode: 201, latencyMs: 20 },
+          ],
+        }),
+      }),
+    );
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as { received: { endpoint: string }[] };
+    expect(body.received.map((r) => r.endpoint)).toEqual(["/batch-1", "/batch-2"]);
+  });
+
+  it("rejects missing, invalid, and revoked keys", async () => {
+    const { handleWebhookIngest } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key, record } = await caller.webhooks.createKey({ name: "Revoke me" });
+
+    const payload = JSON.stringify({
+      endpoint: "/x",
+      method: "GET",
+      statusCode: 200,
+      latencyMs: 1,
+    });
+
+    const noKey = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        body: payload,
+      }),
+    );
+    expect(noKey.status).toBe(401);
+
+    const badKey = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers: { authorization: "Bearer apk_not-a-real-key" },
+        body: payload,
+      }),
+    );
+    expect(badKey.status).toBe(401);
+
+    await caller.webhooks.revokeKey({ id: record.id });
+    const revoked = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}` },
+        body: payload,
+      }),
+    );
+    expect(revoked.status).toBe(401);
+  });
+
+  it("validates the payload and rejects malformed bodies", async () => {
+    const { handleWebhookIngest } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key } = await caller.webhooks.createKey({ name: "Strict" });
+    const headers = {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+    };
+
+    const badJson = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers,
+        body: "{not-json",
+      }),
+    );
+    expect(badJson.status).toBe(400);
+
+    const badPayload = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ endpoint: "", method: "GET", statusCode: 200, latencyMs: 1 }),
+      }),
+    );
+    expect(badPayload.status).toBe(400);
+
+    const badBatch = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ events: [] }),
+      }),
+    );
+    expect(badBatch.status).toBe(400);
+  });
+});

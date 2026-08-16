@@ -49,6 +49,38 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
 /**
+ * Webhook API Keys - long-lived credentials for real-time telemetry ingest.
+ *
+ * An external API gateway can POST request telemetry to
+ * `POST /api/webhook/ingest` with `Authorization: Bearer <key>` instead of
+ * needing a browser session. Only a SHA-256 hash of the key is stored; the
+ * plaintext is shown once at creation and can never be recovered.
+ */
+export const apiKeys = mysqlTable(
+  "api_keys",
+  {
+    id: serial("id").primaryKey(),
+    userId: int("user_id").notNull().default(0),
+    name: varchar("name", { length: 120 }).notNull(),
+    // SHA-256 hex digest of the full key (key_hash is what the webhook
+    // handler looks up; the plaintext key is never persisted).
+    keyHash: varchar("key_hash", { length: 64 }).notNull(),
+    // Last 4 characters of the plaintext key, so the UI can identify a key
+    // without ever revealing it.
+    keyHint: varchar("key_hint", { length: 4 }).notNull(),
+    lastUsedAt: timestamp("last_used_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("api_keys_user_idx").on(table.userId),
+    keyHashIdx: uniqueIndex("api_keys_hash_idx").on(table.keyHash),
+  }),
+);
+
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = typeof apiKeys.$inferInsert;
+
+/**
  * API Requests Log - stores every API request for monitoring.
  * Each row is owned by a single user (multi-tenant isolation).
  */
