@@ -16,5 +16,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["api/**/*.test.ts", "api/**/*.spec.ts"],
+    // Password hashing (scrypt) in the auth/integration tests is intentionally
+    // slow; 5s per test is too tight on slower machines and in CI.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
