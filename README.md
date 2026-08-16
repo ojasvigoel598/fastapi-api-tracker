@@ -132,7 +132,7 @@ Set these in the Vercel project dashboard (**Production** environment):
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `DEMO_MODE=true` | *or* the two below | Runs the app fully in-memory with the seeded demo data — no database needed. Ideal for a live portfolio demo. In-memory data is per-function-instance and resets on cold starts. |
-| `DATABASE_URL` | *or* `DEMO_MODE=true` | External MySQL connection string (Drizzle / `mysql2`). Vercel does not host MySQL — use any MySQL provider and enable connection pooling for serverless. |
+| `DATABASE_URL` | *or* `DEMO_MODE=true` | External MySQL connection string (Drizzle / `mysql2`). Vercel does not host MySQL — use any MySQL provider (see [Free MySQL database](#free-mysql-database)). The app honours `?ssl-mode=` (REQUIRED / VERIFY_CA / VERIFY_IDENTITY / DISABLED) and `?connectionLimit=` from the URL. |
 | `APP_SECRET` | Yes (unless demo) | Long random value; signs the session cookie and tokens. |
 | `OWNER_EMAIL` / `OWNER_PASSWORD` | Optional | Seeds an admin account. |
 | `VITE_CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY` | Optional | Clerk auth. |
@@ -157,12 +157,65 @@ inside `api/vercel.ts` before it reaches Hono.
   (`scripts/vercel-smoke.mjs`), so a broken Vercel output fails the build
   before you ever deploy.
 
+## Free MySQL database
+
+Vercel doesn't host MySQL, so a real-data deployment needs an external
+database. Both options below are genuinely free (no credit card) and work
+with this repo out of the box — the app parses the `?ssl-mode=` /
+`?connectionLimit=` params straight from the connection string.
+
+### TiDB Cloud Serverless (recommended)
+
+MySQL-compatible, **serverless** (scales to zero when idle — no connection
+ceiling to manage under Vercel's concurrent lambdas), free tier with ~5 GB
+storage, and a first-party Vercel Marketplace integration.
+
+1. Sign up at <https://tidbcloud.com> → create a free **Serverless** cluster.
+2. In **Connect**, pick *MySQL* → copy the connection string, e.g.:
+
+   ```
+   mysql://<user>:<password>@gateway01.<region>.prod.aws.tidbcloud.com:4000/<db>?ssl-mode=REQUIRED
+   ```
+
+3. Apply the schema once (from anywhere with network access):
+
+   ```bash
+   export DATABASE_URL="<the connection string above>"
+   npm run db:migrate
+   npm run db:seed   # optional: seed the first user with 1500 demo rows
+   ```
+
+4. Set the same `DATABASE_URL` (plus `APP_SECRET`) in Vercel → Deploy.
+
+TiDB requires TLS — keep `?ssl-mode=REQUIRED` in the URL.
+
+### Aiven for MySQL (free tier)
+
+A genuine MySQL 8, always-free: 1 GB storage, 1 GB RAM, 1 CPU, backups.
+TLS is mandatory and free instances cap at **76 concurrent connections**,
+so keep the pool small for serverless concurrency (`?connectionLimit=3`
+below). Free services may power down after inactivity and wake on demand.
+
+1. Sign up at <https://aiven.io> → **Create service** → *MySQL* → **Free** plan.
+2. From the service overview, copy the connection string, e.g.:
+
+   ```
+   mysql://avnadmin:<password>@<host>.aivencloud.com:13306/defaultdb?ssl-mode=REQUIRED&connectionLimit=3
+   ```
+
+3. Run `npm run db:migrate` with that `DATABASE_URL`, then set it in Vercel.
+
 ## Continuous integration (GitHub Actions)
 
 `.github/workflows/ci.yml` runs on every push and PR:
 `npm ci` → `tsc -b` → eslint → vitest → production build → **Vercel output
 build + serverless-function smoke test** → in-process smoke-boot of the
-production bundle. GitHub runs it automatically on this repository.
+production bundle → **real-MySQL end-to-end** (boots a `mysql:8.4` service,
+applies the migrations, registers a user, seeds 1500 rows, verifies
+percentiles, ingests webhook telemetry and confirms it persisted). The
+MySQL job is what catches SQL bugs the in-memory demo-store unit tests
+can't — e.g. the p95 window-function query or timestamp precision. GitHub
+runs everything automatically on this repository.
 
 ## Zero-credential local demo
 
@@ -256,6 +309,7 @@ npm run db:migrate   # apply committed migrations (db/migrations/*) to MySQL
 npm run db:push      # push the Drizzle schema directly to MySQL
 npm run db:verify    # run real Drizzle queries against MySQL to prove the prod data path
 npm run db:seed      # seed the first user (or SEED_USER_ID=<id>) with demo telemetry
+npm run db:e2e       # full real-MySQL e2e (ephemeral MySQL; or MYSQL_E2E_URL=...)
 ```
 
 ## Preview recovery & sandbox recycling
@@ -358,7 +412,7 @@ sandbox); the one used below was
 | # | Check | Result |
 | --- | --- | --- |
 | 1 | Typecheck — `npm run check` | ✅ passed (no errors) |
-| 2 | Test suite — `npm test` | ✅ 47 passed (8 files) |
+| 2 | Test suite — `npm test` | ✅ 54 passed (9 files) |
 | 3 | Readiness probe — `GET /api/health` | ✅ `200` `{"ok":true,"mode":"demo"}` |
 | 4 | Sign in — `POST /api/trpc/auth.login` | ✅ `200`, `set-cookie: app_sid=…; HttpOnly; Secure; SameSite=Lax`, body contains the signed `token` |
 | 5 | Session via cookie — `GET /api/trpc/auth.me` | ✅ `200`, returns `demo@example.com` |
