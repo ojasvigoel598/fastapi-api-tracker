@@ -57,3 +57,6 @@ coverage/
 
 # OS and editor artifacts
 Thumbs.db
+
+# Freebuff desktop workspace (local run docs, preview logs, app DB)
+.freebuff/
