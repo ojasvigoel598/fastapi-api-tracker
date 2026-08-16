@@ -725,6 +725,12 @@ export function timeSeries(
 
 // ─── Endpoints ────────────────────────────────────────────────────────
 
+function percentileOf(latencies: number[], p: number): number {
+  if (latencies.length === 0) return 0;
+  const sorted = [...latencies].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? 0;
+}
+
 export function endpoints(range: TimeRange, limit: number | undefined, userId: number, startDate?: Date, endDate?: Date): Endpoint[] {
   ensureSeeded();
   const { since, until } = rangeMs(range, startDate, endDate);
@@ -763,9 +769,9 @@ export function endpoints(range: TimeRange, limit: number | undefined, userId: n
       avgLatencyMs: round2(avg),
       maxLatencyMs: v.lats.length ? Math.max(...v.lats) : 0,
       minLatencyMs: v.lats.length ? Math.min(...v.lats) : 0,
-      p50LatencyMs: 0,
-      p95LatencyMs: 0,
-      p99LatencyMs: 0,
+      p50LatencyMs: percentileOf(v.lats, 0.5),
+      p95LatencyMs: percentileOf(v.lats, 0.95),
+      p99LatencyMs: percentileOf(v.lats, 0.99),
       lastRequestedAt: v.last,
       updatedAt: new Date(),
     };
