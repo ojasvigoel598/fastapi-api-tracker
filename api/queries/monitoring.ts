@@ -251,20 +251,27 @@ export async function getOverviewMetrics(
       ),
     );
 
-  const latencyRows = await db
-    .select({ latency: apiRequests.latencyMs })
-    .from(apiRequests)
-    .where(
-      and(
-        eq(apiRequests.userId, userId),
-        gte(apiRequests.createdAt, since),
-        lte(apiRequests.createdAt, until),
-      ),
-    )
-    .orderBy(asc(apiRequests.latencyMs));
-
-  const p95Index = Math.floor(latencyRows.length * 0.95);
-  const p95Latency = latencyRows[p95Index]?.latency ?? 0;
+  // p95 computed in SQL (nearest-rank via a window function) instead of
+  // downloading every latency row and sorting in JS — exact same result,
+  // constant memory, works at any volume.
+  const p95Results = await db.execute(
+    sql`
+      SELECT MIN(${apiRequests.latencyMs}) AS p95
+      FROM (
+        SELECT
+          ${apiRequests.latencyMs},
+          ROW_NUMBER() OVER (ORDER BY ${apiRequests.latencyMs}) AS rn,
+          COUNT(*) OVER () AS n
+        FROM ${apiRequests}
+        WHERE ${apiRequests.userId} = ${userId}
+          AND ${apiRequests.createdAt} >= ${since}
+          AND ${apiRequests.createdAt} <= ${until}
+      ) ranked
+      WHERE rn >= CEIL(0.95 * n)
+    `,
+  );
+  const p95Rows = (p95Results[0] as unknown as Array<{ p95: number | string | null }>) ?? [];
+  const p95Latency = Number(p95Rows[0]?.p95 ?? 0);
 
   const endpointCount = await db
     .select({ count: sql<number>`COUNT(DISTINCT ${apiRequests.endpoint})` })
@@ -405,20 +412,42 @@ export async function getEndpoints(
 
   const results = await db.execute(
     sql`
+      WITH ranked AS (
+        SELECT
+          ${apiRequests.endpoint} AS ep,
+          ${apiRequests.method} AS method,
+          ${apiRequests.latencyMs} AS latency_ms,
+          ${apiRequests.statusCode} AS status_code,
+          ${apiRequests.createdAt} AS created_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY ${apiRequests.endpoint}, ${apiRequests.method}
+            ORDER BY ${apiRequests.latencyMs}
+          ) AS rn,
+          COUNT(*) OVER (
+            PARTITION BY ${apiRequests.endpoint}, ${apiRequests.method}
+          ) AS n
+        FROM ${apiRequests}
+        WHERE ${apiRequests.userId} = ${userId}
+          AND ${apiRequests.createdAt} >= ${since}
+          AND ${apiRequests.createdAt} <= ${until}
+      )
       SELECT
-        ${apiRequests.endpoint} as path,
-        ${apiRequests.method} as method,
-        COUNT(*) as total_requests,
-        SUM(CASE WHEN ${apiRequests.statusCode} >= 400 THEN 1 ELSE 0 END) as failed_requests,
-        AVG(${apiRequests.latencyMs}) as avg_latency,
-        MAX(${apiRequests.latencyMs}) as max_latency,
-        MIN(${apiRequests.latencyMs}) as min_latency,
-        MAX(${apiRequests.createdAt}) as last_requested
-      FROM ${apiRequests}
-      WHERE ${apiRequests.userId} = ${userId}
-        AND ${apiRequests.createdAt} >= ${since}
-        AND ${apiRequests.createdAt} <= ${until}
-      GROUP BY ${apiRequests.endpoint}, ${apiRequests.method}
+        ep AS path,
+        method,
+        COUNT(*) AS total_requests,
+        SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS failed_requests,
+        AVG(latency_ms) AS avg_latency,
+        MAX(latency_ms) AS max_latency,
+        MIN(latency_ms) AS min_latency,
+        MAX(created_at) AS last_requested,
+        -- Nearest-rank percentiles, computed with a single pass over the
+        -- window. rn >= CEIL(p * n) picks the first row at or above the
+        -- percentile position; MIN then yields exactly that latency.
+        MIN(CASE WHEN rn >= CEIL(0.50 * n) THEN latency_ms END) AS p50,
+        MIN(CASE WHEN rn >= CEIL(0.95 * n) THEN latency_ms END) AS p95,
+        MIN(CASE WHEN rn >= CEIL(0.99 * n) THEN latency_ms END) AS p99
+      FROM ranked
+      GROUP BY ep, method
       ORDER BY total_requests DESC
       ${limit ? sql`LIMIT ${limit}` : sql``}
     `,
@@ -432,6 +461,9 @@ export async function getEndpoints(
     avg_latency: number | string;
     max_latency: number | string;
     min_latency: number | string;
+    p50: number | string | null;
+    p95: number | string | null;
+    p99: number | string | null;
     last_requested: Date | string;
   }>) ?? [];
 
@@ -448,9 +480,9 @@ export async function getEndpoints(
       avgLatencyMs: Math.round(Number(r.avg_latency ?? 0) * 100) / 100,
       maxLatencyMs: Number(r.max_latency ?? 0),
       minLatencyMs: Number(r.min_latency ?? 0),
-      p50LatencyMs: 0,
-      p95LatencyMs: 0,
-      p99LatencyMs: 0,
+      p50LatencyMs: Math.round(Number(r.p50 ?? 0) * 100) / 100,
+      p95LatencyMs: Math.round(Number(r.p95 ?? 0) * 100) / 100,
+      p99LatencyMs: Math.round(Number(r.p99 ?? 0) * 100) / 100,
       lastRequestedAt: r.last_requested instanceof Date ? r.last_requested : new Date(r.last_requested),
       updatedAt: new Date(),
     };
