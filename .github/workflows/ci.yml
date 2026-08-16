@@ -50,3 +50,45 @@ jobs:
             console.log('smoke: /api/health ' + res.status + ' mode=' + body.mode);
             if (res.status !== 200) process.exit(1);
           "
+
+  # Build the production image and publish it to GHCR on every push to
+  # main. This is also the live build of the Dockerfile — if the multi-stage
+  # Dockerfile breaks, the deploy job fails even before any hosting is wired.
+  deploy:
+    name: Build & push Docker image to GHCR
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Trigger an actual redeploy on your hosting platform. Enable when you
+      # have a deploy target: create a DEPLOY_HOOK_URL secret (Render/Railway/
+      # Fly webhook or your own API) and uncomment this step.
+      # - name: Trigger platform redeploy
+      #   run: curl -fsS -X POST "${{ secrets.DEPLOY_HOOK_URL }}"
