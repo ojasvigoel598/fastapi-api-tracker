@@ -17,7 +17,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx db/seed.ts",
-    "db:verify": "tsx db/verify.ts"
+    "db:verify": "tsx db/verify.ts",
+    "db:e2e": "tsx scripts/mysql-e2e.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.965.0",
@@ -100,6 +101,7 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "kimi-plugin-inspect-react": "^1.0.3",
+    "mysql-memory-server": "^1.15.0",
     "postcss": "^8.5.6",
     "prettier": "^3.7.4",
     "tailwindcss": "^3.4.19",
