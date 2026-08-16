@@ -57,6 +57,57 @@ local demo or Supabase path remains active.
 Every monitoring route is authenticated and scoped to the signed-in user, so one
 account can never read or modify another account's requests, alerts, or metrics.
 
+## Real-time telemetry webhook
+
+External API gateways can push request telemetry **as it happens** — no browser
+session required. Create a key on the **Webhooks** page (sidebar), then:
+
+```bash
+curl -X POST https://your-app/api/webhook/ingest \
+  -H "Authorization: Bearer apk_..." \
+  -H "Content-Type: application/json" \
+  -d '{"endpoint":"/api/v1/users","method":"GET","statusCode":200,"latencyMs":42}'
+```
+
+- Authenticates with a long-lived API key (SHA-256 hashed at rest; the
+  plaintext is shown exactly once at creation and can never be recovered).
+- Accepts a single event or a batch: `{"events":[...]}` (up to 500).
+- Uses the same payload schema, validation, atomic rate-limit enforcement,
+  and usage limits as `POST /api/ingest`, so both channels feed the same
+  monitoring queries and limits.
+- The dashboard polls every 10s, so webhook-streamed telemetry appears live
+  without a manual refresh.
+
+## Docker (one-command production)
+
+```bash
+docker compose up --build
+# app → http://localhost:3000
+```
+
+The compose stack boots **MySQL 8**, applies the Drizzle migrations via a
+one-shot service, and only then starts the production server. A named volume
+(`mysql_data`) persists the database across restarts. Set `PORT`, `MYSQL_PASSWORD`,
+`MYSQL_ROOT_PASSWORD`, and `APP_SECRET` in a `.env` file for anything other than
+local development:
+
+```bash
+# .env
+APP_SECRET=change-me-to-a-long-random-secret
+MYSQL_PASSWORD=dev-password
+MYSQL_ROOT_PASSWORD=root-password
+```
+
+The runtime image ships only production dependencies and the built bundle; a
+commented-out `seed` service in `docker-compose.yml` can optionally provision the
+owner admin account (`OWNER_EMAIL` / `OWNER_PASSWORD`).
+
+## Continuous integration (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on every push and PR:
+`npm ci` → `tsc -b` → eslint → vitest → production build → smoke-boot of the
+production bundle. GitHub runs it automatically on this repository.
+
 ## Zero-credential local demo
 
 No API keys, no database, no external services required:
@@ -250,7 +301,7 @@ sandbox); the one used below was
 | # | Check | Result |
 | --- | --- | --- |
 | 1 | Typecheck — `npm run check` | ✅ passed (no errors) |
-| 2 | Test suite — `npm test` | ✅ 36 passed (6 files) |
+| 2 | Test suite — `npm test` | ✅ 41 passed (7 files) |
 | 3 | Readiness probe — `GET /api/health` | ✅ `200` `{"ok":true,"mode":"demo"}` |
 | 4 | Sign in — `POST /api/trpc/auth.login` | ✅ `200`, `set-cookie: app_sid=…; HttpOnly; Secure; SameSite=Lax`, body contains the signed `token` |
 | 5 | Session via cookie — `GET /api/trpc/auth.me` | ✅ `200`, returns `demo@example.com` |
@@ -259,9 +310,14 @@ sandbox); the one used below was
 
 The automated suite additionally covers (offline, no external services): the
 login → session-cookie → `auth.me` flow, bearer-token authentication, multi-user
-data isolation, `/api/ingest` telemetry, the failure-history endpoint (30
+data isolation, `/api/ingest` telemetry, webhook API-key create/list/revoke and
+single/batch ingest with 401/400 enforcement, the failure-history endpoint (30
 failures by default with pagination), and usage-limit thresholds, resets,
 duplicate-alert suppression, and hard-limit enforcement.
+
+Latency percentiles (p50/p95/p99) are computed in MySQL with window functions
+(nearest-rank), and the overview p95 is computed in SQL instead of downloading
+every row — both stay constant-memory at any volume.
 
 **Screenshots** were not captured in this environment because the sandbox has no
 browser tooling, and the managed preview proxy is controlled by Freebuff (it
