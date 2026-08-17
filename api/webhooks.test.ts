@@ -206,6 +206,46 @@ describe("webhook API keys", () => {
     expect(badBatch.status).toBe(400);
   });
 
+  it("never over-counts under concurrent ingests once a rate limit is hit", async () => {
+    // The demo store enforces rate limits with a per-key mutex; concurrent
+    // webhook ingests must be serialized so exactly `limit` pass.
+    const { handleWebhookIngest } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key } = await caller.webhooks.createKey({ name: "Race" });
+
+    const endpoint = `/rl-webhook-${Date.now()}`;
+    await caller.limits.save({
+      endpoint,
+      method: "GET",
+      config: {
+        dailyLimit: 3,
+        monthlyLimit: null,
+        costLimit: null,
+        warningThreshold: 50,
+        criticalThreshold: 80,
+        emailAlerts: false,
+        rateLimiting: true,
+      },
+    });
+
+    const fire = () =>
+      handleWebhookIngest(
+        new Request("http://localhost/api/webhook/ingest", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${key}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ endpoint, method: "GET", statusCode: 200, latencyMs: 5 }),
+        }),
+      );
+
+    const results = await Promise.all(Array.from({ length: 8 }, fire));
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 201)).toHaveLength(3);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(5);
+  });
+
   it("exercises the full webhook flow over HTTP (login → key → ingest → query)", async () => {
     // Boot the real app (boot.ts wiring: body guard, /api/trpc, webhook
     // route) and drive everything through app.request — this is the same
