@@ -2,6 +2,8 @@
 
 ![CI](https://github.com/ojasvigoel598/fastapi-api-tracker/actions/workflows/ci.yml/badge.svg)
 [![Docker](https://ghcr-badge.egpl.dev/ojasvigoel598/fastapi-api-tracker/latest_tag?label=docker&color=%2344cc11)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
+[![Docker pulls](https://ghcr-badge.elias.eu.org/shield/ojasvigoel598/fastapi-api-tracker)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
+[![Docker size](https://ghcr-badge.egpl.dev/ojasvigoel598/fastapi-api-tracker/size?tag=latest&label=image%20size&color=%2344cc11)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
 
 A full-stack API monitoring dashboard: request logs, analytics charts, endpoints,
 alerts, and AI-assisted insights.
@@ -126,6 +128,26 @@ npm i -g vercel
 vercel deploy
 ```
 
+**Option C — auto-deploy from GitHub Actions (recommended for real data):**
+
+the `deploy-vercel` job in `.github/workflows/ci.yml` deploys to production on
+every push to `main`, **after** lint/typecheck/tests/build all pass. It uses
+Vercel's `pull → build --prod → deploy --prebuilt --prod` pattern, so the
+serverless artifact CI already built and smoke-tested is uploaded as-is
+(Vercel does not rebuild). To enable it, add three **repository secrets**
+(Settings → Secrets and variables → Actions → New repository secret):
+
+| Secret | Where to get it |
+| --- | --- |
+| `VERCEL_TOKEN` | <https://vercel.com/account/tokens> → create a token |
+| `VERCEL_ORG_ID` | `.vercel/project.json` after `vercel link` (or your team dashboard URL) |
+| `VERCEL_PROJECT_ID` | same `.vercel/project.json` |
+
+Optionally add `DATABASE_URL`, `DEMO_MODE`, and `APP_SECRET` as secrets too —
+they are passed to the CI build so the auto-migrate step can run during the
+deploy. The job is skipped until `VERCEL_TOKEN` exists, so CI stays green
+before the deploy is wired up.
+
 ### Environment variables
 
 Set these in the Vercel project dashboard (**Production** environment):
@@ -246,6 +268,12 @@ burst of concurrent webhook ingests against the real database, and asserts
 exactly the allowed number pass (no over-counting under the row-lock
 transaction).
 
+On every push to `main`, an additional **`deploy-vercel`** job (see
+[Deploy to Vercel](#deploy-to-vercel)) builds the production output and
+deploys it to Vercel with `--prebuilt` — gated on the quality job and
+skipped until the `VERCEL_TOKEN` / `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID`
+secrets are configured.
+
 ## Zero-credential local demo
 
 No API keys, no database, no external services required:
@@ -335,6 +363,7 @@ npm run lint         # eslint
 npm run check        # tsc -b
 npm run db:generate  # generate a new migration from db/schema.ts (offline)
 npm run db:migrate   # apply committed migrations (db/migrations/*) to MySQL
+npm run db:migrate:run # programmatic migrator (retries transient DB errors; used by the Vercel build)
 npm run db:push      # push the Drizzle schema directly to MySQL
 npm run db:verify    # run real Drizzle queries against MySQL to prove the prod data path
 npm run db:seed      # seed the first user (or SEED_USER_ID=<id>) with demo telemetry
