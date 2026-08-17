@@ -31,6 +31,8 @@ import {
   Plus,
   Webhook,
   ShieldCheck,
+  RotateCcw,
+  History,
 } from "lucide-react";
 
 const REFRESH_MS = 10_000;
@@ -77,6 +79,33 @@ export default function WebhooksPage() {
   const revokeMutation = trpc.webhooks.revokeKey.useMutation({
     onSuccess: () => {
       utils.webhooks.listKeys.invalidate();
+    },
+  });
+
+  const { data: deliveries } = trpc.webhooks.listDeliveries.useQuery(
+    undefined,
+    { refetchInterval: REFRESH_MS },
+  );
+
+  const [replayResult, setReplayResult] = useState<{
+    id: number;
+    text: string;
+  } | null>(null);
+
+  const replayMutation = trpc.webhooks.replayDelivery.useMutation({
+    onSuccess: (result, { id }) => {
+      setReplayResult({
+        id,
+        text: result.blocked
+          ? `Replayed — blocked by rate limit (0 recorded)`
+          : `Replayed ${result.received} event${result.received === 1 ? "" : "s"} ✓`,
+      });
+      utils.webhooks.listDeliveries.invalidate();
+      setTimeout(() => setReplayResult(null), 4000);
+    },
+    onError: (err, { id }) => {
+      setReplayResult({ id, text: `Replay failed: ${err.message}` });
+      setTimeout(() => setReplayResult(null), 6000);
     },
   });
 
@@ -267,6 +296,99 @@ export default function WebhooksPage() {
                     <TableRow>
                       <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
                         No API keys yet. Create one above to start streaming telemetry.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Recent deliveries (replay) */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-medium flex items-center gap-2">
+              <History className="h-4 w-4 text-primary" />
+              Recent deliveries ({(deliveries ?? []).length})
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Re-fire a past webhook batch without re-sending it from your
+              gateway. Replays go through the same rate limits, so an
+              over-limit batch is blocked again.
+            </p>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Key</TableHead>
+                    <TableHead>Outcome</TableHead>
+                    <TableHead>Events</TableHead>
+                    <TableHead>Received</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(deliveries ?? []).length > 0 ? (
+                    (deliveries ?? []).map((delivery) => (
+                      <TableRow key={delivery.id}>
+                        <TableCell className="font-medium">
+                          {delivery.keyName ?? "—"}
+                        </TableCell>
+                        <TableCell>
+                          {delivery.outcome === "received" ? (
+                            <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                              received
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                              blocked
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {delivery.eventCount}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDate(delivery.receivedAt)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex flex-col items-end gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                replayMutation.mutate({ id: delivery.id })
+                              }
+                              disabled={replayMutation.isPending}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                              Replay
+                            </Button>
+                            {replayResult?.id === delivery.id && (
+                              <span
+                                className={`text-xs ${
+                                  replayResult.text.includes("failed")
+                                    ? "text-destructive"
+                                    : replayResult.text.includes("blocked")
+                                      ? "text-amber-600 dark:text-amber-400"
+                                      : "text-emerald-600 dark:text-emerald-400"
+                                }`}
+                              >
+                                {replayResult.text}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                        No webhook deliveries yet. Send a batch above and it
+                        appears here for replay.
                       </TableCell>
                     </TableRow>
                   )}
