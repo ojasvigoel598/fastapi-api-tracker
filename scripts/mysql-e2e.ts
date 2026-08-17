@@ -229,15 +229,89 @@ const bad = await fetch("http://localhost/api/webhook/ingest", {
 assert(bad.status === 401, `bad-key ingest ${bad.status}`);
 console.log("[mysql-e2e] bad-key webhook -> 401");
 
-// ── 8) Verify PERSISTENCE directly in MySQL ────────────────────────────
-const check = await mysql.createConnection({
+// ── 7b) RATE-LIMIT HARDENING: concurrent webhook ingests vs real MySQL ──
+// Separate connection for direct SQL assertions in this section.
+const check2 = await mysql.createConnection({
   host: cfg.host,
   port: cfg.port,
   user: cfg.user,
   password: cfg.password,
   database: cfg.database,
 });
-const [rows] = (await check.query(
+
+// Configure a hard daily limit on a fresh endpoint, then fire many webhook
+// ingests at once. The MySQL path enforces atomically (row lock + transaction
+// in api/queries/usage.ts), so exactly `limit` must pass and every excess
+// request must be blocked — no over-counting, no deadlocks, no 500s.
+const rlEndpoint = `/api/v1/e2e-rate-limit-${Date.now()}`;
+const RL_LIMIT = 3;
+const RL_ATTEMPTS = 12;
+await authed.limits.save.mutate({
+  endpoint: rlEndpoint,
+  method: "GET",
+  config: {
+    dailyLimit: RL_LIMIT,
+    monthlyLimit: null,
+    costLimit: null,
+    warningThreshold: 50,
+    criticalThreshold: 80,
+    emailAlerts: false,
+    rateLimiting: true,
+  },
+});
+console.log(
+  `[mysql-e2e] rate limit ${RL_LIMIT}/day on ${rlEndpoint}; firing ${RL_ATTEMPTS} concurrent webhook ingests…`,
+);
+
+const rlResults = await Promise.all(
+  Array.from({ length: RL_ATTEMPTS }, () =>
+    fetch("http://localhost/api/webhook/ingest", {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ endpoint: rlEndpoint, method: "GET", statusCode: 200, latencyMs: 5 }),
+    }),
+  ),
+);
+const statuses = rlResults.map((r) => r.status);
+const allowed = statuses.filter((s) => s === 201).length;
+const blocked = statuses.filter((s) => s === 429).length;
+const unexpected = statuses.filter((s) => s !== 201 && s !== 429);
+console.log(
+  `[mysql-e2e] concurrent rate-limit results: ${allowed}×201, ${blocked}×429${unexpected.length ? `, UNEXPECTED ${unexpected.join(",")}` : ""}`,
+);
+assert(allowed === RL_LIMIT, `expected exactly ${RL_LIMIT} allowed, got ${allowed}`);
+assert(blocked === RL_ATTEMPTS - RL_LIMIT, `expected ${RL_ATTEMPTS - RL_LIMIT} blocked, got ${blocked}`);
+assert(unexpected.length === 0, `unexpected statuses: ${unexpected.join(",")}`);
+
+// The blocked rows must exist in MySQL (blocked=1) and never count as usage.
+const [rlRows] = (await check2.query(
+  "SELECT blocked, COUNT(*) AS n FROM api_requests WHERE user_id = ? AND endpoint = ? GROUP BY blocked",
+  [userId, rlEndpoint],
+)) as unknown as Array<{ blocked: number; n: number | string }>;
+const blockedCount = rlRows.find((r) => r.blocked === 1);
+const unblockedCount = rlRows.find((r) => r.blocked === 0);
+assert(
+  Number(unblockedCount?.n ?? 0) === RL_LIMIT,
+  `expected ${RL_LIMIT} non-blocked rows in MySQL, got ${unblockedCount?.n}`,
+);
+assert(
+  Number(blockedCount?.n ?? 0) === RL_ATTEMPTS - RL_LIMIT,
+  `expected ${RL_ATTEMPTS - RL_LIMIT} blocked rows in MySQL, got ${blockedCount?.n}`,
+);
+const [usageRow] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND endpoint = ? AND blocked = 0 AND status_code = 200",
+  [userId, rlEndpoint],
+)) as unknown as Array<{ n: number | string }>;
+assert(
+  Number(usageRow[0].n) === RL_LIMIT,
+  `blocked rows leaked into usage: ${usageRow[0].n}`,
+);
+console.log(
+  `[mysql-e2e] MySQL agrees: ${unblockedCount?.n} non-blocked + ${blockedCount?.n} blocked rows (no over-count)`,
+);
+
+// ── 8) Verify PERSISTENCE directly in MySQL ────────────────────────────
+const [rows] = (await check2.query(
   "SELECT endpoint, method, status_code, latency_ms, user_id FROM api_requests WHERE endpoint IN ('/api/v1/e2e-checkout','/api/v1/e2e-orders') ORDER BY id DESC LIMIT 5",
 )) as unknown as Array<{
   endpoint: string;
@@ -251,7 +325,7 @@ assert(rows.length >= 4, `expected >=4 persisted webhook rows, got ${rows.length
 for (const r of rows) {
   assert(r.user_id === userId, `webhook row userId=${r.user_id} != ${userId}`);
 }
-const [keyRow] = (await check.query(
+const [keyRow] = (await check2.query(
   "SELECT name, last_used_at FROM api_keys WHERE user_id = ?",
   [userId],
 )) as unknown as Array<{ name: string; last_used_at: Date | string | null }>;
@@ -259,7 +333,7 @@ console.log("[mysql-e2e] api_keys row:", JSON.stringify(keyRow));
 assert(keyRow[0]?.name === "e2e-key", "api key row missing/name mismatch");
 assert(keyRow[0]?.last_used_at != null, "lastUsedAt not updated after ingest");
 
-const [overviewRow] = (await check.query(
+const [overviewRow] = (await check2.query(
   "SELECT COUNT(*) AS total FROM api_requests WHERE user_id = ?",
   [userId],
 )) as unknown as Array<{ total: number | string }>;
@@ -274,7 +348,7 @@ console.log(
 );
 assert(overview1.totalRequests >= 1504, "overview did not reflect the webhook-ingested rows");
 
-await check.end();
+await check2.end();
 if (server) {
   await server.stop().catch(() => {});
 }
