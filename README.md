@@ -148,6 +148,21 @@ they are passed to the CI build so the auto-migrate step can run during the
 deploy. The job is skipped until `VERCEL_TOKEN` exists, so CI stays green
 before the deploy is wired up.
 
+**One-command activation:** create a token at <https://vercel.com/account/tokens>,
+then run `scripts/setup-vercel-deploy.mjs` — it links the project, reads the
+org/project IDs from `.vercel/project.json`, and either sets the three
+secrets via the `gh` CLI automatically or prints the exact `gh secret set`
+commands (and the manual UI path) with your real values ready to paste:
+
+```bash
+VERCEL_TOKEN=<token> node scripts/setup-vercel-deploy.mjs
+```
+
+On every successful deploy, the job also **reports the production URL back
+as a GitHub commit status** (“Vercel Production”), so the deploy result is
+visible on the commit — no extra secrets needed (uses the built-in
+`GITHUB_TOKEN`).
+
 ### Environment variables
 
 Set these in the Vercel project dashboard (**Production** environment):
@@ -502,7 +517,7 @@ recent failures.
 │   └── vercel.ts         # Vercel serverless entry (path reconstruction)
 ├── contracts/            # Shared constants and errors
 ├── db/                   # Drizzle schema, relations, seed script
-├── scripts/              # start-preview.sh, vercel-build.mjs, vercel-smoke.mjs
+├── scripts/              # start-preview.sh, vercel-build.mjs, vercel-smoke.mjs, migrate.ts, setup-vercel-deploy.mjs
 ├── src/                  # React frontend (pages, components, providers)
 ├── drizzle.config.ts     # Drizzle config
 ├── vercel.json           # Vercel build config (Build Output API)
