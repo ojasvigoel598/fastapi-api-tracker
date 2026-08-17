@@ -17,6 +17,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx db/seed.ts",
+    "db:migrate:run": "tsx scripts/migrate.ts",
     "db:verify": "tsx db/verify.ts",
     "db:e2e": "tsx scripts/mysql-e2e.ts"
   },

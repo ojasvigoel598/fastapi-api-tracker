@@ -17,6 +17,7 @@
  * back to index.html so SPA deep links work.
  */
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -25,6 +26,35 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outRoot = path.join(root, ".vercel", "output");
 const funcDir = path.join(outRoot, "functions", "api.func");
 const staticDir = path.join(outRoot, "static");
+
+// 0) Apply pending DB migrations when a real database is configured. A
+//    freshly-provisioned TiDB/Aiven database has zero tables, so running the
+//    Drizzle migrations here makes the first deploy "just work". Skipped for
+//    demo deployments (no DATABASE_URL or DEMO_MODE=true) and in CI (which
+//    does not set DATABASE_URL). Set SKIP_DB_MIGRATE=1 to disable when you
+//    run migrations from a separate pipeline. A failed migration aborts the
+//    build so a schema-less deploy never ships.
+if (
+  process.env.SKIP_DB_MIGRATE !== "1" &&
+  process.env.DATABASE_URL &&
+  process.env.DEMO_MODE !== "true"
+) {
+  console.log("[vercel] DATABASE_URL present — applying pending Drizzle migrations…");
+  try {
+    execSync("npx --no-install tsx scripts/migrate.ts", {
+      stdio: "inherit",
+      cwd: root,
+    });
+    console.log("[vercel] migrations OK");
+  } catch {
+    console.error(
+      "[vercel] migration failed — aborting build so a schema-less deploy never ships",
+    );
+    process.exit(1);
+  }
+} else {
+  console.log("[vercel] skipping DB migrations (demo mode or no DATABASE_URL)");
+}
 
 await rm(outRoot, { recursive: true, force: true });
 await mkdir(funcDir, { recursive: true });
