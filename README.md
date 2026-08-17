@@ -90,6 +90,17 @@ after fixing a consumer bug. Replays go through the exact same ingest and
 rate-limit path, so an over-limit batch is blocked again (and the replay
 itself is recorded as a new delivery).
 
+Replay is also available over the REST API with the same bearer key, e.g. to
+re-fire the delivery with id `42` from a gateway script:
+
+```bash
+curl -X POST https://your-app/api/webhook/replay/42 \
+  -H "Authorization: Bearer apk_..."
+# 200 → {"ok":true,"replayId":43,"received":2,"blocked":false}
+# 429 → {"ok":false,"blocked":true,...} when the replayed batch is over limit
+# 404 → the delivery id does not belong to this key's user
+```
+
 ## Docker (one-command production)
 
 ```bash
