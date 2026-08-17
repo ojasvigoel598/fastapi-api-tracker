@@ -168,7 +168,24 @@ with this repo out of the box — the app parses the `?ssl-mode=` /
 
 MySQL-compatible, **serverless** (scales to zero when idle — no connection
 ceiling to manage under Vercel's concurrent lambdas), free tier with ~5 GB
-storage, and a first-party Vercel Marketplace integration.
+storage, and a first-party **Vercel Marketplace integration** — the database
+is provisioned from inside Vercel and `DATABASE_URL` is set automatically.
+
+#### Wire it up through the Vercel Marketplace (zero CLI)
+
+1. Deploy this repo to Vercel first (any way: Git import or `vercel deploy`).
+2. In the Vercel project: **Settings → Integrations → Browse** → **TiDB
+   Cloud Serverless** → **Add**. Authorize and pick a free Serverless cluster
+   (a few minutes to provision).
+3. The integration creates the database **and sets `DATABASE_URL` for the
+   project automatically** — no env var to paste.
+4. Add `APP_SECRET` (Project → Settings → Environment Variables →
+   Production: a long random value).
+5. **Redeploy** (or push a commit). The Vercel build detects `DATABASE_URL`
+   and **applies the Drizzle migrations automatically** (see below), so the
+   first deploy already has the schema — no manual step.
+
+#### Manually (or outside Vercel)
 
 1. Sign up at <https://tidbcloud.com> → create a free **Serverless** cluster.
 2. In **Connect**, pick *MySQL* → copy the connection string, e.g.:
@@ -181,11 +198,19 @@ storage, and a first-party Vercel Marketplace integration.
 
    ```bash
    export DATABASE_URL="<the connection string above>"
-   npm run db:migrate
-   npm run db:seed   # optional: seed the first user with 1500 demo rows
+   npm run db:migrate:run   # programmatic Drizzle migrator (no CLI prompts)
+   npm run db:seed          # optional: seed the first user with 1500 demo rows
    ```
 
 4. Set the same `DATABASE_URL` (plus `APP_SECRET`) in Vercel → Deploy.
+
+**Automatic migrations on deploy:** when the Vercel build sees `DATABASE_URL`
+(and `DEMO_MODE` is not `true`), it runs `scripts/migrate.ts` before
+assembling the output — a fresh database is migrated on the very first
+deploy, and later schema changes apply on the next push. A failed migration
+**aborts the build**, so a schema-less deploy never ships. Set
+`SKIP_DB_MIGRATE=1` if you run migrations from a separate pipeline.
+`npm run db:migrate:run` runs the same migrator manually.
 
 TiDB requires TLS — keep `?ssl-mode=REQUIRED` in the URL.
 
@@ -214,8 +239,11 @@ production bundle → **real-MySQL end-to-end** (boots a `mysql:8.4` service,
 applies the migrations, registers a user, seeds 1500 rows, verifies
 percentiles, ingests webhook telemetry and confirms it persisted). The
 MySQL job is what catches SQL bugs the in-memory demo-store unit tests
-can't — e.g. the p95 window-function query or timestamp precision. GitHub
-runs everything automatically on this repository.
+can't — e.g. the p95 window-function query or timestamp precision.GitHub runs everything automatically on this repository. The MySQL job also
+proves **rate-limit hardening**: it configures a hard daily limit, fires a
+burst of concurrent webhook ingests against the real database, and asserts
+exactly the allowed number pass (no over-counting under the row-lock
+transaction).
 
 ## Zero-credential local demo
 
