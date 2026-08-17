@@ -134,3 +134,54 @@ jobs:
       # Fly webhook or your own API) and uncomment this step.
       # - name: Trigger platform redeploy
       #   run: curl -fsS -X POST "${{ secrets.DEPLOY_HOOK_URL }}"
+
+  # Deploy to Vercel on every push to main. Follows Vercel's documented
+  # three-command pattern: `vercel pull` -> `vercel build --prod` (builds on
+  # this runner, producing .vercel/output) -> `vercel deploy --prebuilt --prod`
+  # (uploads the artifact; Vercel does NOT rebuild). The project's build
+  # command (vercel.json) is `npm run build:vercel`, so the same serverless
+  # output CI already smoke-tests is what ships. Gated on the quality job, and
+  # skipped until the VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID
+  # secrets are configured (so CI stays green before the deploy is wired).
+  deploy-vercel:
+    name: Deploy to Vercel (production)
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.ref == 'refs/heads/main' && secrets.VERCEL_TOKEN != ''
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Project Artifacts
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          # Builds run on this runner, so system env vars from Vercel are NOT
+          # available here — pass the DB through explicitly when configured so
+          # the auto-migrate step in scripts/vercel-build.mjs can run.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DEMO_MODE: ${{ secrets.DEMO_MODE }}
+
+      - name: Deploy Project Artifacts to Vercel
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DEMO_MODE: ${{ secrets.DEMO_MODE }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
