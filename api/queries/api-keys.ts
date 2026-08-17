@@ -58,20 +58,24 @@ function demoListFor(userId: number): ApiKeyWithUsage[] {
  */
 export async function findUserByApiKey(
   key: string,
-): Promise<{ userId: number; keyId: number } | undefined> {
+): Promise<{ userId: number; keyId: number; keyName: string } | undefined> {
   const keyHash = hashKey(key);
   if (env.isDemoMode) {
     const row = demoKeys.find((k) => k.keyHash === keyHash);
-    return row ? { userId: row.userId, keyId: row.id } : undefined;
+    return row
+      ? { userId: row.userId, keyId: row.id, keyName: row.name }
+      : undefined;
   }
   const db = getDb();
   const rows = await db
-    .select({ userId: apiKeys.userId, keyId: apiKeys.id })
+    .select({ userId: apiKeys.userId, keyId: apiKeys.id, keyName: apiKeys.name })
     .from(apiKeys)
     .where(eq(apiKeys.keyHash, keyHash))
     .limit(1);
   const row = rows.at(0);
-  return row ? { userId: row.userId, keyId: row.keyId } : undefined;
+  return row
+    ? { userId: row.userId, keyId: row.keyId, keyName: row.keyName }
+    : undefined;
 }
 
 /** Touch `last_used_at` after a successful webhook ingest. */

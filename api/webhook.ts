@@ -18,12 +18,118 @@
 
 import { z } from "zod";
 import { findUserByApiKey, touchApiKey } from "./queries/api-keys";
+import {
+  recordWebhookDelivery,
+  type DeliveryOutcome,
+} from "./queries/webhook-deliveries";
 import { enforceAndRecord } from "./queries/usage";
 import { ingestSchema, json } from "./ingest";
 
 const batchSchema = z.object({
   events: z.array(ingestSchema).min(1).max(500),
 });
+
+export type IngestEvent = z.infer<typeof ingestSchema>;
+
+export interface WebhookOwner {
+  userId: number;
+  keyId: number;
+  keyName: string;
+}
+
+export interface IngestOutcome {
+  received: {
+    id: number;
+    endpoint: string;
+    method: string;
+    statusCode: number;
+  }[];
+  blocked: {
+    endpoint: string;
+    method: string;
+    message: string;
+    resetAt: string;
+  } | undefined;
+}
+
+/**
+ * Run validated events through the shared ingest + rate-limit path.
+ *
+ * Both the live webhook handler and the replay action use this exact loop,
+ * so a replay behaves identically to the original delivery (including rate
+ * limits: replaying an over-limit batch is blocked the same way).
+ */
+export async function ingestEvents(
+  owner: WebhookOwner,
+  events: IngestEvent[],
+  meta: {
+    forwardedFor?: string | null;
+    userAgent?: string | null;
+    now?: Date;
+  } = {},
+): Promise<IngestOutcome> {
+  const now = meta.now ?? new Date();
+  const received: IngestOutcome["received"] = [];
+  let blocked: IngestOutcome["blocked"];
+
+  for (const event of events) {
+    const result = await enforceAndRecord(
+      owner.userId,
+      {
+        ...event,
+        requestHeaders: event.requestHeaders ?? {},
+        sourceIp: meta.forwardedFor || null,
+        userAgent: meta.userAgent ?? null,
+        createdAt: now,
+      },
+      now,
+    );
+
+    if (!result.allowed) {
+      const limit = result.limit;
+      const times = [
+        limit?.daily.resetAt,
+        limit?.monthly.resetAt,
+        limit?.cost.resetAt,
+      ]
+        .filter((d): d is Date => !!d)
+        .map((d) => d.getTime());
+      blocked = {
+        endpoint: event.endpoint,
+        method: event.method,
+        message: `Rate limit exceeded for ${event.method} ${event.endpoint}`,
+        resetAt: times.length
+          ? new Date(Math.min(...times)).toISOString()
+          : new Date().toISOString(),
+      };
+      break;
+    }
+
+    received.push({
+      id: result.request.id,
+      endpoint: event.endpoint,
+      method: event.method,
+      statusCode: event.statusCode,
+    });
+  }
+
+  return { received, blocked };
+}
+
+/** Record a delivery in the replay history (capped per user). */
+export async function recordDelivery(
+  owner: WebhookOwner,
+  events: IngestEvent[],
+  outcome: DeliveryOutcome,
+): Promise<number> {
+  return recordWebhookDelivery({
+    userId: owner.userId,
+    keyId: owner.keyId,
+    keyName: owner.keyName,
+    outcome,
+    events: events.map((e) => ({ ...e })),
+  });
+}
 
 function bearerToken(request: Request): string | undefined {
   const authorization = request.headers.get("authorization");
@@ -66,49 +172,13 @@ export async function handleWebhookIngest(request: Request): Promise<Response> {
   const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   const userAgent = request.headers.get("user-agent");
 
-  const received: { id: number; endpoint: string; method: string; statusCode: number }[] = [];
-  let blocked: { endpoint: string; method: string; message: string; resetAt: string } | undefined;
-
-  for (const event of events) {
-    const result = await enforceAndRecord(
-      owner.userId,
-      {
-        ...event,
-        requestHeaders: event.requestHeaders ?? {},
-        sourceIp: forwardedFor || null,
-        userAgent,
-        createdAt: new Date(),
-      },
-      new Date(),
-    );
-
-    if (!result.allowed) {
-      const limit = result.limit;
-      const times = [
-        limit?.daily.resetAt,
-        limit?.monthly.resetAt,
-        limit?.cost.resetAt,
-      ]
-        .filter((d): d is Date => !!d)
-        .map((d) => d.getTime());
-      blocked = {
-        endpoint: event.endpoint,
-        method: event.method,
-        message: `Rate limit exceeded for ${event.method} ${event.endpoint}`,
-        resetAt: times.length ? new Date(Math.min(...times)).toISOString() : new Date().toISOString(),
-      };
-      break;
-    }
-
-    received.push({
-      id: result.request.id,
-      endpoint: event.endpoint,
-      method: event.method,
-      statusCode: event.statusCode,
-    });
-  }
+  const { received, blocked } = await ingestEvents(owner, events, {
+    forwardedFor,
+    userAgent,
+  });
 
   await touchApiKey(owner.keyId);
+  await recordDelivery(owner, events, blocked ? "blocked" : "received");
 
   if (blocked) {
     return json({ ok: false, blocked: true, ...blocked }, 429);

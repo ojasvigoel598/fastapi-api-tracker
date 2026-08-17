@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   mysqlEnum,
@@ -328,3 +329,43 @@ export const usageAlerts = mysqlTable(
 
 export type UsageAlert = typeof usageAlerts.$inferSelect;
 export type InsertUsageAlert = typeof usageAlerts.$inferInsert;
+
+/**
+ * Webhook Deliveries - raw telemetry batches received via the webhook,
+ * retained for replay.
+ *
+ * Stores the exact validated event payloads a gateway submitted to
+ * `POST /api/webhook/ingest`, so a signed-in user can re-fire a delivery
+ * (e.g. after fixing a consumer bug) without re-sending it from the gateway.
+ * Capped at the most recent `MAX_DELIVERIES_PER_USER` per user. `outcome` is
+ * `received` when every event was recorded, `blocked` when a rate limit
+ * stopped the batch part-way.
+ */
+export const webhookDeliveries = mysqlTable(
+  "webhook_deliveries",
+  {
+    id: serial("id").primaryKey(),
+    userId: int("user_id").notNull().default(0),
+    // Owning key (nullable for safety; key rows can be revoked).
+    keyId: int("key_id"),
+    // Snapshot of the key name at delivery time (survives key deletion).
+    keyName: varchar("key_name", { length: 120 }),
+    outcome: mysqlEnum("outcome", ["received", "blocked"]).notNull(),
+    eventCount: int("event_count").notNull(),
+    events: json("events").$type<Record<string, unknown>[]>().notNull(),
+    // now(6) keeps microsecond precision even as a DEFAULT (plain now()
+    // evaluates with fsp 0); the app also always passes receivedAt explicitly.
+    receivedAt: timestamp("received_at", { fsp: 6 })
+      .notNull()
+      .default(sql`(now(6))`),
+  },
+  (table) => ({
+    userIdIdx: index("webhook_deliveries_user_idx").on(table.userId),
+    receivedAtIdx: index("webhook_deliveries_received_at_idx").on(
+      table.receivedAt,
+    ),
+  }),
+);
+
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type InsertWebhookDelivery = typeof webhookDeliveries.$inferInsert;
