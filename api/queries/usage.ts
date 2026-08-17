@@ -221,6 +221,23 @@ export async function deleteUsageLimit(
 
 // ─── Alert persistence + email ────────────────────────────────────────
 
+function isDuplicateKeyError(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current; depth++) {
+    if (current instanceof Error) {
+      const code = (current as Error & { code?: string }).code;
+      if (typeof code === "string" && /^ER_DUP/.test(code)) return true;
+      if (/duplicate|ER_DUP_ENTRY|unique constraint/i.test(current.message)) {
+        return true;
+      }
+      current = (current as Error & { cause?: unknown }).cause;
+    } else {
+      break;
+    }
+  }
+  return false;
+}
+
 async function dashboardUrl(endpoint: string, method: string): Promise<string> {
   const base = env.appUrl || "";
   if (!base) return "";
@@ -296,10 +313,13 @@ async function persistOutcome(
     return alert;
   } catch (err) {
     // Duplicate key → the same threshold already fired this period. Skip.
-    if (
-      err instanceof Error &&
-      /duplicate|ER_DUP_ENTRY|unique|ER_DUP/i.test(err.message)
-    ) {
+    // Drizzle wraps the mysql2 error ("Failed query: …") and leaves the real
+    // message ("Duplicate entry … ER_DUP_ENTRY …") on `cause`, so walk the
+    // cause chain instead of matching only the top-level message. Without
+    // this, two concurrent ingests crossing a threshold race to insert the
+    // same (limitId, period, severity, periodKey) alert and the loser 500s
+    // instead of being deduped.
+    if (isDuplicateKeyError(err)) {
       return null;
     }
     throw err;
