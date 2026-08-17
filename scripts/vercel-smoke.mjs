@@ -67,4 +67,30 @@ const preserved = await GET(
 assert(preserved.status === 200, `preserved-path health status ${preserved.status}`);
 console.log(`[vercel-smoke] preserved-path /api/health -> ${preserved.status}`);
 
+// 7) Boot under the exact Vercel runtime environment. Vercel sets
+//    NODE_ENV=production and VERCEL=1; a zero-config deploy has no env vars,
+//    so the function must boot in demo mode (not throw at module load). A
+//    fresh import (cache-busting query) re-evaluates module init with the new
+//    environment, exactly like a cold serverless start.
+process.env.NODE_ENV = "production";
+process.env.VERCEL = "1";
+delete process.env.DATABASE_URL;
+delete process.env.DEMO_MODE;
+delete process.env.APP_SECRET;
+const prod = await import(
+  "../.vercel/output/functions/api.func/index.mjs?prod-boot"
+);
+const prodHealth = await prod.GET(
+  new Request("http://localhost/api?vercelPath=/health"),
+);
+assert(
+  prodHealth.status === 200,
+  `production boot health status ${prodHealth.status} (function must boot in demo mode without env vars)`,
+);
+const prodBody = await prodHealth.json();
+assert(prodBody.mode === "demo", `production boot mode ${prodBody.mode}`);
+console.log(
+  `[vercel-smoke] production boot (NODE_ENV=production, no env) -> ${prodHealth.status} (mode=${prodBody.mode})`,
+);
+
 console.log("[vercel-smoke] OK — all checks passed");

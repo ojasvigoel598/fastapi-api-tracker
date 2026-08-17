@@ -26,12 +26,25 @@ const supabaseAnonKey = required("SUPABASE_ANON_KEY");
 const supabaseJwtSecret = required("SUPABASE_JWT_SECRET");
 const clerkSecretKey = required("CLERK_SECRET_KEY");
 
-if (isProduction && !forceDemo && !databaseUrl) {
-  throw new Error("DATABASE_URL is required in production; set DEMO_MODE=true to run the in-memory demo in production");
+// A fresh, zero-configuration production deploy (e.g. clicking Deploy on Vercel
+// without setting env vars) has no DATABASE_URL. Instead of crashing the
+// whole serverless function at module load with an opaque 500, fall back to
+// the in-memory demo and warn loudly. A DATABASE_URL that is set but
+// unreachable still fails loudly at query time — it never silently serves
+// demo data. Set DEMO_MODE=true or DATABASE_URL to silence the warning.
+const demoFallback = isProduction && !forceDemo && !databaseUrl;
+if (demoFallback) {
+  console.warn(
+    "[demo] No DATABASE_URL in production — serving the in-memory demo. " +
+      "Set DATABASE_URL (or DEMO_MODE=true) to run against a real database.",
+  );
 }
-if (isProduction && !forceDemo && !required("APP_SECRET")) {
+if (isProduction && !forceDemo && !demoFallback && !required("APP_SECRET")) {
   throw new Error("APP_SECRET is required in production");
 }
+
+/** Demo mode is active whenever no real database is configured. */
+const demoActive = forceDemo || !databaseUrl;
 
 export const env = {
   isProduction,
@@ -39,11 +52,11 @@ export const env = {
   /**
    * Demo mode is active when DATABASE_URL is unset or DEMO_MODE=true.
    * The app then serves seeded in-memory data instead of MySQL and uses a
-   * local email/password auth backed by the in-memory store. DEMO_MODE=true
-   * works even with NODE_ENV=production so a hosted (e.g. Vercel) demo
-   * deployment can run without a database.
+   * local email/password auth backed by the in-memory store. This includes
+   * zero-config production deploys (Vercel with no env vars), which fall
+   * back to demo mode with a loud warning instead of failing to boot.
    */
-  isDemoMode: forceDemo || (!isProduction && !databaseUrl),
+  isDemoMode: demoActive,
 
   /**
    * Clerk Auth is enabled when the server secret is configured. The browser
@@ -62,7 +75,7 @@ export const env = {
   /** Signs the application session cookie. */
   sessionSecret:
     required("APP_SECRET") ||
-    (forceDemo ? DEMO_SESSION_SECRET : !isProduction ? supabaseJwtSecret || DEMO_SESSION_SECRET : ""),
+    (demoActive ? DEMO_SESSION_SECRET : supabaseJwtSecret || DEMO_SESSION_SECRET),
 
   /** Optional: email of the deployment owner (granted the admin role). */
   ownerEmail: (process.env.OWNER_EMAIL ?? "").toLowerCase(),
