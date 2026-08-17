@@ -348,6 +348,84 @@ console.log(
 );
 assert(overview1.totalRequests >= 1504, "overview did not reflect the webhook-ingested rows");
 
+// ── 8b) WEBHOOK REPLAY against real MySQL ─────────────────────────────
+// Deliveries must be persisted (raw events as JSON), replayable through the
+// same ingest path, and the replayed rows must land in MySQL.
+const deliveries = await authed.webhooks.listDeliveries.query();
+console.log(
+  `[mysql-e2e] webhook deliveries in history: ${deliveries.length} (${deliveries
+    .map((d) => `${d.id}:${d.outcome}/${d.eventCount}`)
+    .join(", ")})`,
+);
+const batchDelivery = deliveries.find(
+  (d) => d.eventCount === 3 && d.outcome === "received",
+);
+assert(
+  batchDelivery,
+  "expected a 3-event received delivery in history (from the batch ingest)",
+);
+
+// The raw events must be persisted as JSON in MySQL.
+const [deliveryEvents] = (await check2.query(
+  "SELECT events, event_count, outcome FROM webhook_deliveries WHERE id = ?",
+  [batchDelivery.id],
+)) as unknown as Array<{
+  events: string | unknown[];
+  event_count: number;
+  outcome: string;
+}>;
+// mysql2 already parses JSON columns into JS values; handle both forms.
+const rawEvents = deliveryEvents[0].events;
+const parsedEvents = (
+  typeof rawEvents === "string" ? JSON.parse(rawEvents) : rawEvents
+) as unknown[];
+assert(
+  Array.isArray(parsedEvents) && parsedEvents.length === 3,
+  `stored events JSON corrupt (${deliveryEvents[0]?.events?.slice(0, 60)}…)`,
+);
+assert(deliveryEvents[0].outcome === "received", "delivery outcome mismatch");
+console.log(
+  `[mysql-e2e] delivery #${batchDelivery.id} events JSON persisted (${parsedEvents.length} events)`,
+);
+
+const [preRows] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND endpoint = '/api/v1/e2e-checkout'",
+  [userId],
+)) as unknown as Array<{ n: number | string }>;
+
+const replay = await authed.webhooks.replayDelivery.mutate({
+  id: batchDelivery.id,
+});
+assert(replay.received === 3, `replay received ${replay.received} != 3`);
+assert(replay.blocked === false, "replay unexpectedly blocked");
+console.log(
+  `[mysql-e2e] replayed delivery #${batchDelivery.id} -> ${replay.received} events (new delivery #${replay.replayId})`,
+);
+
+const [postRows] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND endpoint = '/api/v1/e2e-checkout'",
+  [userId],
+)) as unknown as Array<{ n: number | string }>;
+assert(
+  Number(postRows[0].n) === Number(preRows[0].n) + 2,
+  `expected +2 checkout rows after replay (batch had 2 checkout events), got ${preRows[0].n} -> ${postRows[0].n}`,
+);
+console.log(
+  `[mysql-e2e] MySQL agrees: e2e-checkout rows ${preRows[0].n} -> ${postRows[0].n} after replay`,
+);
+
+const [deliveryCount] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM webhook_deliveries WHERE user_id = ?",
+  [userId],
+)) as unknown as Array<{ n: number | string }>;
+assert(
+  Number(deliveryCount[0].n) === deliveries.length + 1,
+  `expected ${deliveries.length + 1} delivery rows in MySQL, got ${deliveryCount[0].n}`,
+);
+console.log(
+  `[mysql-e2e] webhook_deliveries rows in MySQL: ${deliveryCount[0].n}`,
+);
+
 await check2.end();
 if (server) {
   await server.stop().catch(() => {});
