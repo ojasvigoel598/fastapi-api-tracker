@@ -12,7 +12,15 @@
 
 import { sql } from "drizzle-orm";
 import { getDb } from "../api/queries/connection";
-import { apiRequests, alerts, endpoints, users, usageAlerts, usageLimits } from "./schema";
+import {
+  apiRequests,
+  alerts,
+  endpoints,
+  users,
+  usageAlerts,
+  usageLimits,
+  webhookDeliveries,
+} from "./schema";
 import {
   getOverviewMetrics,
   getStatusCodeDistribution,
@@ -27,6 +35,7 @@ const TABLES = [
   ["alerts", alerts],
   ["usage_limits", usageLimits],
   ["usage_alerts", usageAlerts],
+  ["webhook_deliveries", webhookDeliveries],
 ] as const;
 
 async function verify() {

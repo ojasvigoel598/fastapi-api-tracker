@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { apiRequests, alerts } from "@db/schema";
+import { clearWebhookDeliveries } from "./queries/webhook-deliveries";
 import { env } from "./lib/env";
 import * as demoStore from "./demo/store";
 
@@ -326,11 +327,13 @@ export const seedRouter = createRouter({
   clear: authedQuery.mutation(async ({ ctx }) => {
     if (env.isDemoMode) {
       demoStore.clear(ctx.user.id);
+      await clearWebhookDeliveries(ctx.user.id);
       return { message: "Your monitoring data cleared" };
     }
     const db = getDb();
     await db.delete(apiRequests).where(eq(apiRequests.userId, ctx.user.id));
     await db.delete(alerts).where(eq(alerts.userId, ctx.user.id));
+    await clearWebhookDeliveries(ctx.user.id);
     return { message: "Your monitoring data cleared" };
   }),
 });
