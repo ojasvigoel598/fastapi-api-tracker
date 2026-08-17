@@ -153,6 +153,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: quality
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      statuses: write
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -191,8 +194,29 @@ jobs:
 
       - name: Deploy Project Artifacts to Vercel
         if: env.VERCEL_TOKEN != ''
-        run: vercel deploy --prebuilt --prod --token=${{ env.VERCEL_TOKEN }}
+        id: deploy
+        run: |
+          DEPLOY_OUTPUT=$(vercel deploy --prebuilt --prod --token=${{ env.VERCEL_TOKEN }})
+          echo "$DEPLOY_OUTPUT"
+          # The CLI prints the deployment URL on its own line.
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.vercel\.app' | head -1)
+          echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DEMO_MODE: ${{ secrets.DEMO_MODE }}
           APP_SECRET: ${{ secrets.APP_SECRET }}
+
+      # Surface the live deployment back on GitHub: a commit status with the
+      # production URL, so the deploy result is visible on the commit/PR even
+      # though CLI deploys don't carry Git-provider metadata. Uses the built-in
+      # GITHUB_TOKEN — no extra secrets required.
+      - name: Report deployment status
+        if: env.VERCEL_TOKEN != '' && steps.deploy.outputs.deploy_url != ''
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -d '{"state":"success","context":"Vercel Production","description":"Deployed to Vercel","target_url":"${{ steps.deploy.outputs.deploy_url }}"}'
+          echo "Reported deploy URL: ${{ steps.deploy.outputs.deploy_url }}"
