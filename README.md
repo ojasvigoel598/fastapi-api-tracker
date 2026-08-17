@@ -1,6 +1,7 @@
 # API Monitoring & Admin Dashboard
 
 ![CI](https://github.com/ojasvigoel598/fastapi-api-tracker/actions/workflows/ci.yml/badge.svg)
+[![Docker](https://ghcr-badge.egpl.dev/ojasvigoel598/fastapi-api-tracker/latest_tag?label=docker&color=%2344cc11)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
 
 A full-stack API monitoring dashboard: request logs, analytics charts, endpoints,
 alerts, and AI-assisted insights.
