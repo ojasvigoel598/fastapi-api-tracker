@@ -177,10 +177,12 @@ Set these in the Vercel project dashboard (**Production** environment):
 | `SUPABASE_URL` + `SUPABASE_ANON_KEY` + `SUPABASE_JWT_SECRET` | Optional | Supabase auth. |
 | `KIMI_OPEN_URL` + `KIMI_API_KEY` | Optional | Real AI insights. |
 
-With no `DATABASE_URL`, set `DEMO_MODE=true` — otherwise production fail-closes
-with a clear error. Demo mode also runs with `NODE_ENV=production` (previously
-demo was local-only), which is exactly what a no-database Vercel deployment
-needs.
+With no `DATABASE_URL`, a production deploy **falls back to the in-memory demo
+with a loud boot warning** — so a fresh zero-configuration Vercel deploy works
+out of the box (previously it crashed with `FUNCTION_INVOCATION_FAILED`). Set
+`DEMO_MODE=true` to opt in explicitly, or set `DATABASE_URL` to run against a
+real database. A `DATABASE_URL` that is set but unreachable still fails loudly
+at query time — it never silently serves demo data.
 
 ### How it works on Vercel
 
