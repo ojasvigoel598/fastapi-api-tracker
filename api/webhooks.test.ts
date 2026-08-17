@@ -247,6 +247,107 @@ describe("webhook API keys", () => {
     ).rejects.toThrow();
   });
 
+  it("replays a delivery over the REST API with a bearer key", async () => {
+    const { handleWebhookIngest, handleWebhookReplay } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key } = await caller.webhooks.createKey({ name: "REST replay" });
+
+    const ingest = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          events: [
+            { endpoint: "/rest-replay-1", method: "GET", statusCode: 200, latencyMs: 12 },
+            { endpoint: "/rest-replay-2", method: "POST", statusCode: 204, latencyMs: 30 },
+          ],
+        }),
+      }),
+    );
+    expect(ingest.status).toBe(201);
+
+    const deliveries = await caller.webhooks.listDeliveries();
+    const deliveryId = deliveries[0]!.id;
+
+    const replay = await handleWebhookReplay(
+      new Request(`http://localhost/api/webhook/replay/${deliveryId}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}` },
+      }),
+    );
+    expect(replay.status).toBe(200);
+    const body = (await replay.json()) as {
+      ok: boolean;
+      received: number;
+      blocked: boolean;
+      replayId: number;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.received).toBe(2);
+    expect(body.blocked).toBe(false);
+    expect(body.replayId).toBeGreaterThan(deliveryId);
+
+    // Both endpoints now have 2 rows (original + replay).
+    for (const endpoint of ["/rest-replay-1", "/rest-replay-2"]) {
+      const logs = await caller.monitoring.requests({ filters: { endpoint } });
+      expect(logs.total).toBe(2);
+    }
+  });
+
+  it("REST replay is key-scoped: other users' deliveries 404", async () => {
+    const { handleWebhookIngest, handleWebhookReplay } = await import("./webhook");
+    const owner = await newAuthedCaller();
+    const attacker = await newAuthedCaller();
+
+    const { key: ownerKey } = await owner.webhooks.createKey({ name: "Owner" });
+    const { key: attackerKey } = await attacker.webhooks.createKey({ name: "Attacker" });
+
+    const ingest = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ownerKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          endpoint: "/scoped-1",
+          method: "GET",
+          statusCode: 200,
+          latencyMs: 5,
+        }),
+      }),
+    );
+    expect(ingest.status).toBe(201);
+    const ownerDeliveries = await owner.webhooks.listDeliveries();
+    const deliveryId = ownerDeliveries[0]!.id;
+
+    const otherUserReplay = await handleWebhookReplay(
+      new Request(`http://localhost/api/webhook/replay/${deliveryId}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${attackerKey}` },
+      }),
+    );
+    expect(otherUserReplay.status).toBe(404);
+
+    const noAuth = await handleWebhookReplay(
+      new Request(`http://localhost/api/webhook/replay/${deliveryId}`, {
+        method: "POST",
+      }),
+    );
+    expect(noAuth.status).toBe(401);
+
+    const badId = await handleWebhookReplay(
+      new Request("http://localhost/api/webhook/replay/not-a-number", {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerKey}` },
+      }),
+    );
+    expect(badId.status).toBe(400);
+  });
+
   it("rejects missing, invalid, and revoked keys", async () => {
     const { handleWebhookIngest } = await import("./webhook");
     const caller = await newAuthedCaller();
