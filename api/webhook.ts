@@ -19,6 +19,7 @@
 import { z } from "zod";
 import { findUserByApiKey, touchApiKey } from "./queries/api-keys";
 import {
+  getWebhookDelivery,
   recordWebhookDelivery,
   type DeliveryOutcome,
 } from "./queries/webhook-deliveries";
@@ -138,16 +139,25 @@ function bearerToken(request: Request): string | undefined {
   return token || undefined;
 }
 
-export async function handleWebhookIngest(request: Request): Promise<Response> {
+async function authenticate(request: Request): Promise<
+  | { ok: true; owner: WebhookOwner }
+  | { ok: false; response: Response }
+> {
   const key = bearerToken(request);
   if (!key) {
-    return json({ error: "Authentication required" }, 401);
+    return { ok: false, response: json({ error: "Authentication required" }, 401) };
   }
-
   const owner = await findUserByApiKey(key);
   if (!owner) {
-    return json({ error: "Invalid API key" }, 401);
+    return { ok: false, response: json({ error: "Invalid API key" }, 401) };
   }
+  return { ok: true, owner };
+}
+
+export async function handleWebhookIngest(request: Request): Promise<Response> {
+  const auth = await authenticate(request);
+  if (!auth.ok) return auth.response;
+  const owner = auth.owner;
 
   let body: unknown;
   try {
@@ -185,4 +195,66 @@ export async function handleWebhookIngest(request: Request): Promise<Response> {
   }
 
   return json({ ok: true, received }, 201);
+}
+
+/**
+ * Re-fire a past webhook delivery over the REST API.
+ *
+ *   POST /api/webhook/replay/:id
+ *   Authorization: Bearer apk_...
+ *
+ * Authenticated with the same long-lived API key as ingest; the delivery
+ * is looked up scoped to the key's owner, replayed through the shared
+ * ingest + rate-limit path (so an over-limit batch is blocked again), and
+ * recorded as a new delivery. Returns 404 when the delivery id is not
+ * owned by this key's user.
+ */
+export async function handleWebhookReplay(request: Request): Promise<Response> {
+  const auth = await authenticate(request);
+  if (!auth.ok) return auth.response;
+  const owner = auth.owner;
+
+  const url = new URL(request.url);
+  const id = Number(url.pathname.split("/").at(-1));
+  if (!Number.isInteger(id) || id <= 0) {
+    return json({ error: "Invalid delivery id" }, 400);
+  }
+
+  const delivery = await getWebhookDelivery(owner.userId, id);
+  if (!delivery) {
+    return json({ error: "Delivery not found" }, 404);
+  }
+
+  const events = delivery.events as unknown as IngestEvent[];
+  const { received, blocked } = await ingestEvents(owner, events);
+  const replayId = await recordDelivery(
+    owner,
+    events,
+    blocked ? "blocked" : "received",
+  );
+  await touchApiKey(owner.keyId);
+
+  if (blocked) {
+    return json(
+      {
+        ok: false,
+        blocked: true,
+        replayId,
+        received: received.length,
+        ...blocked,
+      },
+      429,
+    );
+  }
+
+  return json(
+    {
+      ok: true,
+      replayId,
+      received: received.length,
+      blocked: false,
+      firstEvent: received[0] ?? undefined,
+    },
+    200,
+  );
 }
