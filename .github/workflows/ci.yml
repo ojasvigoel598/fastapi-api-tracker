@@ -140,15 +140,21 @@ jobs:
   # this runner, producing .vercel/output) -> `vercel deploy --prebuilt --prod`
   # (uploads the artifact; Vercel does NOT rebuild). The project's build
   # command (vercel.json) is `npm run build:vercel`, so the same serverless
-  # output CI already smoke-tests is what ships. Gated on the quality job, and
-  # skipped until the VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID
-  # secrets are configured (so CI stays green before the deploy is wired).
+  # output CI already smoke-tests is what ships. Gated on the quality job.
+  #
+  # NOTE: `secrets` cannot be referenced in a job-level `if:` expression
+  # ("Unrecognized named-value: 'secrets'"). The secrets are hoisted into the
+  # job `env` instead, and every deploy step is gated on `if: env.VERCEL_TOKEN
+  # != ''` (env context IS allowed in step conditions) — so until the
+  # VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets are configured
+  # the job is a no-op that stays green.
   deploy-vercel:
     name: Deploy to Vercel (production)
     runs-on: ubuntu-latest
     needs: quality
-    if: github.ref == 'refs/heads/main' && secrets.VERCEL_TOKEN != ''
+    if: github.ref == 'refs/heads/main'
     env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
@@ -162,16 +168,20 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        if: env.VERCEL_TOKEN != ''
         run: npm ci
 
       - name: Install Vercel CLI
+        if: env.VERCEL_TOKEN != ''
         run: npm install --global vercel@latest
 
       - name: Pull Vercel Environment Information
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        if: env.VERCEL_TOKEN != ''
+        run: vercel pull --yes --environment=production --token=${{ env.VERCEL_TOKEN }}
 
       - name: Build Project Artifacts
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        if: env.VERCEL_TOKEN != ''
+        run: vercel build --prod --token=${{ env.VERCEL_TOKEN }}
         env:
           # Builds run on this runner, so system env vars from Vercel are NOT
           # available here — pass the DB through explicitly when configured so
@@ -180,7 +190,8 @@ jobs:
           DEMO_MODE: ${{ secrets.DEMO_MODE }}
 
       - name: Deploy Project Artifacts to Vercel
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        if: env.VERCEL_TOKEN != ''
+        run: vercel deploy --prebuilt --prod --token=${{ env.VERCEL_TOKEN }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DEMO_MODE: ${{ secrets.DEMO_MODE }}
