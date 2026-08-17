@@ -91,6 +91,7 @@ export default function WebhooksPage() {
     id: number;
     text: string;
   } | null>(null);
+  const [copiedCurl, setCopiedCurl] = useState<number | null>(null);
 
   const replayMutation = trpc.webhooks.replayDelivery.useMutation({
     onSuccess: (result, { id }) => {
@@ -115,7 +116,18 @@ export default function WebhooksPage() {
     setTimeout(() => setCopied(null), 1500);
   }
 
+  async function handleCopyCurl(deliveryId: number) {
+    await copyText(replayCurl(deliveryId));
+    setCopiedCurl(deliveryId);
+    setTimeout(() => setCopiedCurl(null), 1500);
+  }
+
   const endpoint = `${window.location.origin}/api/webhook/ingest`;
+
+  function replayCurl(id: number): string {
+    return `curl -X POST ${window.location.origin}/api/webhook/replay/${id} \\
+  -H "Authorization: Bearer apk_..."`;
+  }
 
   return (
     <AuthLayout>
@@ -356,17 +368,34 @@ export default function WebhooksPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex flex-col items-end gap-1">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() =>
-                                replayMutation.mutate({ id: delivery.id })
-                              }
-                              disabled={replayMutation.isPending}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                              Replay
-                            </Button>
+                            <div className="flex items-center gap-1.5">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                title="Copy the REST replay curl command"
+                                onClick={() => handleCopyCurl(delivery.id)}
+                              >
+                                {copiedCurl === delivery.id ? (
+                                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5" />
+                                )}
+                                <span className="ml-1.5 text-xs">
+                                  {copiedCurl === delivery.id ? "Copied" : "curl"}
+                                </span>
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  replayMutation.mutate({ id: delivery.id })
+                                }
+                                disabled={replayMutation.isPending}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                                Replay
+                              </Button>
+                            </div>
                             {replayResult?.id === delivery.id && (
                               <span
                                 className={`text-xs ${
