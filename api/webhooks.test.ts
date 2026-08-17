@@ -129,6 +129,124 @@ describe("webhook API keys", () => {
     expect(body.received.map((r) => r.endpoint)).toEqual(["/batch-1", "/batch-2"]);
   });
 
+  it("records deliveries and replays a batch through the ingest path", async () => {
+    const { handleWebhookIngest } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key } = await caller.webhooks.createKey({ name: "Replay me" });
+
+    // 1) A 2-event batch is recorded as a delivery.
+    const ingest = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          events: [
+            { endpoint: "/replay-1", method: "GET", statusCode: 200, latencyMs: 10 },
+            { endpoint: "/replay-2", method: "POST", statusCode: 201, latencyMs: 20 },
+          ],
+        }),
+      }),
+    );
+    expect(ingest.status).toBe(201);
+
+    const before = await caller.webhooks.listDeliveries();
+    expect(before).toHaveLength(1);
+    expect(before[0]?.eventCount).toBe(2);
+    expect(before[0]?.outcome).toBe("received");
+    expect(before[0]?.keyName).toBe("Replay me");
+
+    // 2) Replaying it re-fires both events as new monitoring rows.
+    const replay = await caller.webhooks.replayDelivery({ id: before[0]!.id });
+    expect(replay.received).toBe(2);
+    expect(replay.blocked).toBe(false);
+    expect(replay.replayId).toBeGreaterThan(before[0]!.id);
+
+    // The original + replay are both visible in monitoring.
+    for (const endpoint of ["/replay-1", "/replay-2"]) {
+      const logs = await caller.monitoring.requests({ filters: { endpoint } });
+      expect(logs.total).toBe(2);
+    }
+
+    // The replay itself is recorded as a new delivery.
+    const after = await caller.webhooks.listDeliveries();
+    expect(after).toHaveLength(2);
+    expect(after[0]?.id).toBe(replay.replayId);
+    expect(after[0]?.eventCount).toBe(2);
+  });
+
+  it("replay enforces rate limits again (over-limit batch stays blocked)", async () => {
+    const { handleWebhookIngest } = await import("./webhook");
+    const caller = await newAuthedCaller();
+    const { key } = await caller.webhooks.createKey({ name: "Rate-limited" });
+
+    const endpoint = `/replay-rl-${Date.now()}`;
+    await caller.limits.save({
+      endpoint,
+      method: "GET",
+      config: {
+        dailyLimit: 3,
+        monthlyLimit: null,
+        costLimit: null,
+        warningThreshold: 50,
+        criticalThreshold: 80,
+        emailAlerts: false,
+        rateLimiting: true,
+      },
+    });
+
+    const headers = {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+    };
+    const event = { endpoint, method: "GET", statusCode: 200, latencyMs: 5 };
+
+    // 3 events fit under the 3/day limit → received delivery.
+    const ok = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ events: [event, event, event] }),
+      }),
+    );
+    expect(ok.status).toBe(201);
+
+    // A 4th event is blocked and recorded as a blocked delivery.
+    const blocked = await handleWebhookIngest(
+      new Request("http://localhost/api/webhook/ingest", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(event),
+      }),
+    );
+    expect(blocked.status).toBe(429);
+
+    const deliveries = await caller.webhooks.listDeliveries();
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries[0]?.outcome).toBe("blocked");
+    expect(deliveries[0]?.eventCount).toBe(1);
+    expect(deliveries[1]?.outcome).toBe("received");
+
+    // Replaying the 3-event delivery: usage is already at 3, so the first
+    // replayed event is blocked again — limits apply to replays too.
+    const replay = await caller.webhooks.replayDelivery({ id: deliveries[1]!.id });
+    expect(replay.received).toBe(0);
+    expect(replay.blocked).toBe(true);
+
+    const after = await caller.webhooks.listDeliveries();
+    expect(after).toHaveLength(3);
+    expect(after[0]?.outcome).toBe("blocked");
+  });
+
+  it("rejects replaying a delivery that does not exist", async () => {
+    const caller = await newAuthedCaller();
+    await expect(
+      caller.webhooks.replayDelivery({ id: 999_999 }),
+    ).rejects.toThrow();
+  });
+
   it("rejects missing, invalid, and revoked keys", async () => {
     const { handleWebhookIngest } = await import("./webhook");
     const caller = await newAuthedCaller();
