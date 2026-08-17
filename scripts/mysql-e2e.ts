@@ -426,6 +426,99 @@ console.log(
   `[mysql-e2e] webhook_deliveries rows in MySQL: ${deliveryCount[0].n}`,
 );
 
+// ── 8c) REST REPLAY against real MySQL ────────────────────────────────
+// The REST endpoint (POST /api/webhook/replay/:id) must re-fire the same
+// stored delivery with the bearer key, land the rows in MySQL, and record
+// a new delivery row — the same guarantees as the tRPC replay, over HTTP.
+const [restPreCheckout] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND endpoint = '/api/v1/e2e-checkout'",
+  [userId],
+)) as unknown as Array<{ n: number | string }>;
+const [restPreDeliveries] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM webhook_deliveries WHERE user_id = ?",
+  [userId],
+)) as unknown as Array<{ n: number | string }>;
+
+const restReplay = await fetch(
+  `http://localhost/api/webhook/replay/${batchDelivery.id}`,
+  { method: "POST", headers: { authorization: `Bearer ${apiKey}` } },
+);
+assert(restReplay.status === 200, `REST replay status ${restReplay.status}`);
+const restBody = (await restReplay.json()) as {
+  ok: boolean;
+  replayId: number;
+  received: number;
+  blocked: boolean;
+};
+assert(restBody.ok === true, "REST replay ok=false");
+assert(restBody.received === 3, `REST replay received ${restBody.received} != 3`);
+assert(restBody.blocked === false, "REST replay unexpectedly blocked");
+assert(
+  restBody.replayId > batchDelivery.id,
+  `REST replay id ${restBody.replayId} not newer than ${batchDelivery.id}`,
+  );
+console.log(
+  `[mysql-e2e] REST replayed delivery #${batchDelivery.id} -> ${restBody.received} events (new delivery #${restBody.replayId})`,
+);
+
+const [restPostCheckout] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND endpoint = '/api/v1/e2e-checkout'",
+  [userId],
+)) as unknown as Array<{ n: number | string }>;
+assert(
+  Number(restPostCheckout[0].n) === Number(restPreCheckout[0].n) + 2,
+  `expected +2 checkout rows after REST replay (batch had 2 checkout events), got ${restPreCheckout[0].n} -> ${restPostCheckout[0].n}`,
+);
+const [restPostDeliveries] = (await check2.query(
+  "SELECT COUNT(*) AS n FROM webhook_deliveries WHERE user_id = ?",
+  [userId],
+)) as unknown as Array<{ n: number | string }>;
+assert(
+  Number(restPostDeliveries[0].n) === Number(restPreDeliveries[0].n) + 1,
+  `expected +1 delivery row after REST replay, got ${restPreDeliveries[0].n} -> ${restPostDeliveries[0].n}`,
+);
+console.log(
+  `[mysql-e2e] MySQL agrees: REST replay persisted +2 api_requests and +1 webhook_delivery`,
+);
+
+// A REST replay with another user's key must 404 (key-scoped delivery
+// lookup) — create a second account + key and replay the first user's
+// delivery with it.
+const otherEmail = `mysql-e2e-other-${Date.now()}@example.com`;
+const other = await client.auth.register.mutate({
+  email: otherEmail,
+  password: "password123",
+  name: "Other",
+});
+assert(other?.token, "other user register failed");
+const otherAuthed = createTRPCProxyClient<AppRouter>({
+  links: [
+    httpBatchLink({
+      url: "http://localhost/api/trpc",
+      transformer: superjson,
+      headers: () => ({ authorization: `Bearer ${other.token}` }),
+    }),
+  ],
+});
+const otherKey = await otherAuthed.webhooks.createKey.mutate({ name: "other-key" });
+const crossUser = await fetch(
+  `http://localhost/api/webhook/replay/${batchDelivery.id}`,
+  { method: "POST", headers: { authorization: `Bearer ${otherKey.key}` } },
+);
+assert(
+  crossUser.status === 404,
+  `cross-user REST replay should 404, got ${crossUser.status}`,
+);
+console.log("[mysql-e2e] cross-user REST replay -> 404 (key-scoped)");
+
+// Unauthenticated REST replay -> 401.
+const noAuthReplay = await fetch(
+  `http://localhost/api/webhook/replay/${batchDelivery.id}`,
+  { method: "POST" },
+);
+assert(noAuthReplay.status === 401, `no-auth REST replay ${noAuthReplay.status}`);
+console.log("[mysql-e2e] unauthenticated REST replay -> 401");
+
 await check2.end();
 if (server) {
   await server.stop().catch(() => {});
