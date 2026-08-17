@@ -83,6 +83,13 @@ curl -X POST https://your-app/api/webhook/ingest \
 - The dashboard polls every 10s, so webhook-streamed telemetry appears live
   without a manual refresh.
 
+**Replay:** the most recent 25 deliveries per account are stored (the exact
+validated event payloads, never the bearer keys). On the **Webhooks** page,
+**Recent deliveries** lets you re-fire any delivery with one click — useful
+after fixing a consumer bug. Replays go through the exact same ingest and
+rate-limit path, so an over-limit batch is blocked again (and the replay
+itself is recorded as a new delivery).
+
 ## Docker (one-command production)
 
 ```bash
