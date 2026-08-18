@@ -161,6 +161,28 @@ jobs:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
+      # Surface the deploy state on EVERY run so a green "Deploy to Vercel"
+      # check can never be mistaken for a live deployment. Until the secrets
+      # are configured the job is an intentional no-op that stays green — the
+      # summary + warning annotation below make that obvious instead of silent.
+      - name: Verify deploy prerequisites
+        run: |
+          MISSING=""
+          [ -z "$VERCEL_TOKEN" ] && MISSING="$MISSING VERCEL_TOKEN"
+          [ -z "$VERCEL_ORG_ID" ] && MISSING="$MISSING VERCEL_ORG_ID"
+          [ -z "$VERCEL_PROJECT_ID" ] && MISSING="$MISSING VERCEL_PROJECT_ID"
+          if [ -z "$MISSING" ]; then
+            echo "✅ Vercel deploy ENABLED — this push deploys to production."
+            echo "### ✅ Vercel deploy enabled" >> "$GITHUB_STEP_SUMMARY"
+            echo "This push deploys to production. The live URL is reported as a commit status." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=Vercel deploy is a NO-OP::missing secrets:$MISSING"
+            echo "### ⚠️ Vercel deploy SKIPPED (no-op)" >> "$GITHUB_STEP_SUMMARY"
+            echo "The deploy job stays green but deploys **nothing** until these secrets are configured:" >> "$GITHUB_STEP_SUMMARY"
+            for s in $MISSING; do echo "- \`$s\`" >> "$GITHUB_STEP_SUMMARY"; done
+            echo "Add them in **Settings → Secrets and variables → Actions**, then push again to trigger a real deploy." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
