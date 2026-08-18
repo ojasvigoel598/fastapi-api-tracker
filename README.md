@@ -101,6 +101,42 @@ curl -X POST https://your-app/api/webhook/replay/42 \
 # 404 → the delivery id does not belong to this key's user
 ```
 
+## Track your own FastAPI API
+
+The tracker records telemetry you push to it — it cannot see traffic it is
+not told about. To monitor your own FastAPI (or Starlette/ASGI) app, drop
+in the included middleware (`integrations/fastapi/telemetry.py`) and it
+streams one event per served request to the webhook automatically:
+
+```bash
+pip install httpx
+```
+
+```python
+import os
+from fastapi import FastAPI
+from telemetry import TelemetryMiddleware  # from integrations/fastapi/
+
+app = FastAPI()
+app.add_middleware(TelemetryMiddleware)
+```
+
+Then set two env vars on your API server (never in the browser):
+
+| Variable | Description |
+| --- | --- |
+| `TRACKER_URL` | This app's base URL, e.g. `https://tracker.example.com` |
+| `TRACKER_API_KEY` | An `apk_...` key created on the **Webhooks** page |
+
+From then on the dashboard automatically shows your API's failure rate,
+latency percentiles, endpoints, and (optionally) cost — with per-user
+isolation, configured rate limits enforced atomically at ingest, and
+email alerts on breach. The middleware is fire-and-forget (adds ~0 ms,
+never blocks or breaks your API), forwards only safe headers, and never
+logs the key. Optional extras: a `cost_cb` hook for LLM-style per-request
+cost and a `check_rate_limit()` pre-flight helper. Full guide:
+`integrations/fastapi/README.md`.
+
 ## Docker (one-command production)
 
 ```bash
@@ -537,6 +573,7 @@ recent failures.
 │   └── vercel.ts         # Vercel serverless entry (path reconstruction)
 ├── contracts/            # Shared constants and errors
 ├── db/                   # Drizzle schema, relations, seed script
+├── integrations/         # Ready-to-drop client SDKs (FastAPI telemetry middleware)
 ├── scripts/              # start-preview.sh, vercel-build.mjs, vercel-smoke.mjs, migrate.ts, setup-vercel-deploy.mjs
 ├── src/                  # React frontend (pages, components, providers)
 ├── drizzle.config.ts     # Drizzle config
