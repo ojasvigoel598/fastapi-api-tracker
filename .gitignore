@@ -28,6 +28,8 @@ dist-ssr
 .env.*
 .env.local
 .env.*.local
+# …but the documented example file is committed on purpose (it has no secrets)
+!.env.example
 *.pem
 *.key
 *.crt
