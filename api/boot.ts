@@ -65,12 +65,28 @@ app.get("/api/health", (c) =>
   }),
 );
 
+/**
+ * Global error handler — log the full error server-side, return a generic
+ * JSON body to the client. Responses never leak stack traces, SQL, or
+ * internal paths, in any environment.
+ */
+app.onError((err, c) => {
+  console.error(`[error] ${c.req.method} ${c.req.url}:`, err);
+  return c.json({ error: "Internal Server Error" }, 500);
+});
+
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req: c.req.raw,
     router: appRouter,
     createContext,
+    onError: ({ error, path }) => {
+      // Server-side observability only. tRPC already strips stack traces
+      // from client responses when `isDev` is false (production), and the
+      // middleware is explicitly `isServer` (see api/middleware.ts).
+      console.error(`[trpc] ${path ?? "(unknown path)"}:`, error);
+    },
   });
 });
 
