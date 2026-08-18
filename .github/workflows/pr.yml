@@ -1,0 +1,88 @@
+name: PR Checks
+
+# Verifies every pull request before merge: the same quality gates as CI
+# (typecheck, lint, tests, build, Vercel-output smoke) plus the real-MySQL
+# end-to-end harness. Deploys are intentionally NOT run here — they belong
+# to ci.yml on pushes to the default branch.
+on:
+  pull_request:
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: check · lint · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (tsc -b)
+        run: npm run check
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Tests (vitest)
+        run: npm test
+
+      - name: Build (vite + esbuild API bundle)
+        run: npm run build
+
+      - name: Build Vercel output + smoke-test the serverless function
+        run: |
+          npm run build:vercel
+          node scripts/vercel-smoke.mjs
+
+      - name: Smoke-test the production bundle
+        run: |
+          node --input-type=module -e "
+            const { default: app } = await import('./dist/boot.js');
+            const res = await app.fetch(new Request('http://localhost:3000/api/health'));
+            const body = await res.json();
+            console.log('smoke: /api/health ' + res.status + ' mode=' + body.mode);
+            if (res.status !== 200) process.exit(1);
+          "
+
+  mysql-e2e:
+    name: Real-MySQL end-to-end (migrate → register → seed → webhook → persist)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: app
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run real-MySQL end-to-end harness
+        run: MYSQL_E2E_URL="mysql://root:root@127.0.0.1:3306/app" npm run db:e2e

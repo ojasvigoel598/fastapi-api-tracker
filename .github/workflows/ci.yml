@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main, master]
-  pull_request:
 
+# Pull requests are checked by the dedicated pr.yml workflow (PR Checks);
+# this workflow runs the full pipeline — quality gates, real-MySQL e2e,
+# Docker image push, and the Vercel production deploy — only on pushes to
+# the default branch.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
