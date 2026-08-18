@@ -546,6 +546,72 @@ recent failures.
 └── package.json          # Scripts and dependencies
 ```
 
+## Security hardening
+
+This section documents the security posture of the app and the checks that
+are enforced in code and CI.
+
+### Row-level isolation (RLS-equivalent)
+
+MySQL has no native row-level security, so isolation is enforced at the
+**query layer**: every monitoring query, limit, alert, and webhook key is
+scoped by the authenticated `user_id`, and webhook keys are scoped to the
+account that created them (replaying another user's delivery → `404`). One
+account can never read, modify, or delete another account's data — this is
+covered by multi-user isolation tests and by the real-MySQL e2e harness.
+
+### Secrets and environment
+
+- `.env`, `.env.*`, `.env.local`, `*.pem`, `*.key` are gitignored; nothing
+  secret is ever committed. `.env.example` documents every variable with
+  placeholder values only.
+- Server secrets (`APP_SECRET`, `CLERK_SECRET_KEY`, `SUPABASE_JWT_SECRET`,
+  `KIMI_API_KEY`, `RESEND_API_KEY`) exist only server-side, never in
+  `VITE_*` variables.
+- The webhook API key is **SHA-256 hashed at rest**; the plaintext is shown
+  exactly once at creation and can never be recovered.
+- **AI keys are never in the frontend.** Kimi runs entirely server-side
+  (`KIMI_OPEN_URL` + `KIMI_API_KEY`); the browser only receives a status
+  string (`real` / `mock` / `not_connected`).
+
+### Error hygiene — no stack traces to clients
+
+- A global Hono `onError` handler logs the full error server-side and
+  returns a generic `{"error":"Internal Server Error"}` to the client.
+- The tRPC layer is explicitly server-side (`isServer: true`) and tRPC
+  strips stack traces from client responses when `NODE_ENV=production`.
+  Errors are logged to the server console for debugging.
+- Client-side failure suggestions never echo internal paths or stacks.
+
+### Admin and debug lockdown
+
+- There are **no public admin or debug endpoints**: unknown `/api/*` routes
+  return `404`, the only unauthenticated routes are sign-in/sign-up/auth
+  config/health/ping, and `/api/health` returns no data.
+- An `adminQuery` middleware exists for future admin-only procedures and
+  requires the `admin` role (`FORBIDDEN` otherwise); the owner account
+  (`OWNER_EMAIL`) is the only way to hold that role today.
+
+### Input validation and rate limiting
+
+- **Every user input is validated with zod** (register, login, limits,
+  webhooks, monitoring filters, ingest payloads) — bounded lengths, typed
+  ranges, and `max(500)` batch caps; oversized bodies are rejected with
+  `413` before touching the body stream.
+- **Credential brute-force protection**: a fixed-window in-memory rate
+  limiter blocks repeated failed logins and reports `Retry-After`.
+- **Usage/rate limits are enforced atomically** at ingest (row-lock
+  transaction — concurrent bursts cannot over-count) and are proven in CI
+  against real MySQL.
+
+### Logging and tracking hygiene
+
+- Server logs never print request bodies, bearer tokens, or API keys; the
+  e2e harness deliberately truncates keys in its output.
+- Telemetry stored by the tracker is the payload the API chose to send;
+  the middleware docs (see [Track your own FastAPI API](#track-your-own-fastapi-api))
+  only forward an allowlisted subset of headers.
+
 ## Security notes
 
 - Never commit a real `.env` file — `.env*` is gitignored.
