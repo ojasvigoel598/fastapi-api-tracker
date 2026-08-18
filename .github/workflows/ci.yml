@@ -161,10 +161,10 @@ jobs:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
-      # Surface the deploy state on EVERY run so a green "Deploy to Vercel"
-      # check can never be mistaken for a live deployment. Until the secrets
-      # are configured the job is an intentional no-op that stays green — the
-      # summary + warning annotation below make that obvious instead of silent.
+      # Fail loudly when the deploy is not wired up. A green "Deploy to
+      # Vercel" check must never be mistaken for a live deployment, so if the
+      # secrets are missing the job FAILS with a clear message naming exactly
+      # what to configure — the failure is the signal, not a silent green.
       - name: Verify deploy prerequisites
         run: |
           MISSING=""
@@ -176,11 +176,12 @@ jobs:
             echo "### ✅ Vercel deploy enabled" >> "$GITHUB_STEP_SUMMARY"
             echo "This push deploys to production. The live URL is reported as a commit status." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning title=Vercel deploy is a NO-OP::missing secrets:$MISSING"
-            echo "### ⚠️ Vercel deploy SKIPPED (no-op)" >> "$GITHUB_STEP_SUMMARY"
-            echo "The deploy job stays green but deploys **nothing** until these secrets are configured:" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Vercel deploy FAILED — not configured::missing secrets:$MISSING — add them in Settings → Secrets and variables → Actions, then push again"
+            echo "### ❌ Vercel deploy FAILED — not configured" >> "$GITHUB_STEP_SUMMARY"
+            echo "This job **fails on purpose**: the deploy is not wired up, and a green check must never fake a deployment. Configure these secrets:" >> "$GITHUB_STEP_SUMMARY"
             for s in $MISSING; do echo "- \`$s\`" >> "$GITHUB_STEP_SUMMARY"; done
             echo "Add them in **Settings → Secrets and variables → Actions**, then push again to trigger a real deploy." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - name: Checkout
