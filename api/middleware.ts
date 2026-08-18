@@ -5,6 +5,10 @@ import type { TrpcContext } from "./context";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  // Explicitly server-side. Together with `isDev` (which defaults to
+  // `NODE_ENV !== "production"`), this guarantees tRPC never serializes
+  // stack traces into client responses in production.
+  isServer: true,
 });
 
 export const createRouter = t.router;
