@@ -101,12 +101,13 @@ curl -X POST https://your-app/api/webhook/replay/42 \
 # 404 → the delivery id does not belong to this key's user
 ```
 
-## Track your own FastAPI API
+## Track your own API (FastAPI / Express)
 
 The tracker records telemetry you push to it — it cannot see traffic it is
-not told about. To monitor your own FastAPI (or Starlette/ASGI) app, drop
-in the included middleware (`integrations/fastapi/telemetry.py`) and it
-streams one event per served request to the webhook automatically:
+not told about. Ready-to-drop middleware for **FastAPI** (Python,
+`integrations/fastapi/telemetry.py`) and **Express / Node** (ESM, zero
+dependencies, `integrations/express/telemetry.mjs`) stream one event per
+served request to the webhook automatically. For a FastAPI app:
 
 ```bash
 pip install httpx
@@ -133,9 +134,11 @@ latency percentiles, endpoints, and (optionally) cost — with per-user
 isolation, configured rate limits enforced atomically at ingest, and
 email alerts on breach. The middleware is fire-and-forget (adds ~0 ms,
 never blocks or breaks your API), forwards only safe headers, and never
-logs the key. Optional extras: a `cost_cb` hook for LLM-style per-request
-cost and a `check_rate_limit()` pre-flight helper. Full guide:
-`integrations/fastapi/README.md`.
+logs the key. Optional extras: a `cost_cb` / `costCb` hook for LLM-style per-request
+cost and a `check_rate_limit()` / `checkRateLimit()` pre-flight helper.
+Express setup is identical with `telemetryMiddleware()` + `TRACKER_URL` /
+`TRACKER_API_KEY`. Full guides: `integrations/fastapi/README.md` and
+`integrations/express/README.md`.
 
 ## Docker (one-command production)
 
@@ -573,7 +576,7 @@ recent failures.
 │   └── vercel.ts         # Vercel serverless entry (path reconstruction)
 ├── contracts/            # Shared constants and errors
 ├── db/                   # Drizzle schema, relations, seed script
-├── integrations/         # Ready-to-drop client SDKs (FastAPI telemetry middleware)
+├── integrations/         # Ready-to-drop client SDKs (FastAPI + Express telemetry middleware)
 ├── scripts/              # start-preview.sh, vercel-build.mjs, vercel-smoke.mjs, migrate.ts, setup-vercel-deploy.mjs
 ├── src/                  # React frontend (pages, components, providers)
 ├── drizzle.config.ts     # Drizzle config
