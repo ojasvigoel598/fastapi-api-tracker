@@ -202,8 +202,10 @@ serverless artifact CI already built and smoke-tested is uploaded as-is
 
 Optionally add `DATABASE_URL`, `DEMO_MODE`, and `APP_SECRET` as secrets too —
 they are passed to the CI build so the auto-migrate step can run during the
-deploy. The job is skipped until `VERCEL_TOKEN` exists, so CI stays green
-before the deploy is wired up.
+deploy. Until the secrets exist the job is an **intentional no-op that stays
+green** — every run's summary and log now say so explicitly (a “Vercel
+deploy SKIPPED” warning naming the missing secrets), so a green check can
+never be mistaken for a live deployment.
 
 **One-command activation:** create a token at <https://vercel.com/account/tokens>,
 then run `scripts/setup-vercel-deploy.mjs` — it links the project, reads the
