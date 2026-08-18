@@ -62,3 +62,7 @@ Thumbs.db
 
 # Freebuff desktop workspace (local run docs, preview logs, app DB)
 .freebuff/
+
+# Python (integrations/fastapi)
+__pycache__/
+*.pyc
