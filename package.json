@@ -19,7 +19,8 @@
     "db:seed": "tsx db/seed.ts",
     "db:migrate:run": "tsx scripts/migrate.ts",
     "db:verify": "tsx db/verify.ts",
-    "db:e2e": "tsx scripts/mysql-e2e.ts"
+    "db:e2e": "tsx scripts/mysql-e2e.ts",
+    "db:setup": "tsx scripts/setup-persistent-db.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.965.0",
