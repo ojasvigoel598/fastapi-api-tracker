@@ -59,6 +59,46 @@ jobs:
             if (res.status !== 200) process.exit(1);
           "
 
+      - name: Clean-tree check (pipeline leaves nothing uncommitted)
+        run: |
+          DIRTY=$(git status --porcelain)
+          if [ -n "$DIRTY" ]; then
+            echo "::error title=Dirty working tree::the pipeline generated or modified files that are not committed"
+            echo "$DIRTY"
+            exit 1
+          fi
+          echo "✅ Working tree is clean after the full pipeline."
+
+  # Supply-chain hardening: fail on high/critical dependency advisories and
+  # block obvious credential patterns from ever landing in tracked files.
+  security:
+    name: Dependency audit · secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # npm audit reads package-lock.json directly — no install needed.
+      # Currently 4 moderate (dev-tooling transitive) advisories; the gate
+      # only trips on high or critical.
+      - name: Dependency audit (fail on high/critical)
+        run: npm audit --audit-level=high
+
+      - name: Secret scan (tracked files)
+        run: |
+          MATCHES=$(git grep -n -I -E '(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|re_[A-Za-z0-9]{20,})' -- . ':!package-lock.json' ':!docs/screenshots/**' ':!skills/**' || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error title=Potential secret in tracked files::$MATCHES"
+            echo "$MATCHES"
+            exit 1
+          fi
+          echo "✅ No known credential patterns in tracked files."
+
   # Real-MySQL end-to-end: applies the Drizzle migrations against a genuine
   # MySQL 8 server, then boots the app on DATABASE_URL and drives it through
   # the exact @trpc/client stack the frontend uses (register → seed → overview
