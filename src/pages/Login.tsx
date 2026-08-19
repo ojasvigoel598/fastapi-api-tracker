@@ -39,7 +39,9 @@ export default function Login() {
   const login = trpc.auth.login.useMutation();
   const register = trpc.auth.register.useMutation();
   const supabaseLogin = trpc.auth.supabaseLogin.useMutation();
-  const resetPassword = trpc.auth.resetPassword.useMutation();
+  const requestPasswordReset = trpc.auth.requestPasswordReset.useMutation();
+  const requestSupabasePasswordReset =
+    trpc.auth.requestSupabasePasswordReset.useMutation();
 
   const supabase = useMemo(() => {
     if (config?.mode === "supabase" && config.supabaseUrl && config.supabaseAnonKey) {
@@ -134,13 +136,24 @@ export default function Login() {
 
   function handleForgotPassword() {
     resetFeedback();
-    if (!supabase) {
+    if (!email) return setError("Enter your email first.");
+    if (supabase) {
+      requestSupabasePasswordReset.mutate(
+        { email },
+        {
+          onError: (err) => setError(err.message),
+          onSuccess: () =>
+            setNotice("If that email exists, a reset link has been sent."),
+        },
+      );
+      return;
+    }
+    if (!config?.emailVerificationConfigured) {
       return setNotice(
-        "Password reset is only available when Supabase is configured. In local demo mode, create a new account or use the demo account.",
+        "Password reset needs email to be configured (RESEND_API_KEY + APP_URL). In local demo mode, create a new account or use the demo account.",
       );
     }
-    if (!email) return setError("Enter your email first.");
-    resetPassword.mutate(
+    requestPasswordReset.mutate(
       { email },
       {
         onError: (err) => setError(err.message),
@@ -162,7 +175,8 @@ export default function Login() {
     login.isPending ||
     register.isPending ||
     supabaseLogin.isPending ||
-    resetPassword.isPending;
+    requestPasswordReset.isPending ||
+    requestSupabasePasswordReset.isPending;
 
   if (config?.mode === "clerk") {
     if (!clerkPublishableKey) {

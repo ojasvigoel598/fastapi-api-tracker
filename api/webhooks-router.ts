@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, verifiedQuery } from "./middleware";
 import {
   createApiKey,
   listApiKeys,
@@ -22,8 +22,12 @@ import {
 import { ingestEvents, recordDelivery, type IngestEvent } from "./webhook";
 
 export const webhooksRouter = createRouter({
-  /** Create a key; the returned `key` value is shown exactly once. */
-  createKey: authedQuery
+  /**
+   * Create a key; the returned `key` value is shown exactly once.
+   * Requires a verified email: long-lived ingest credentials should only be
+   * minted once the account owner has proven inbox control.
+   */
+  createKey: verifiedQuery
     .input(
       z.object({
         name: z.string().trim().min(1, "Name is required").max(120),
@@ -34,6 +38,10 @@ export const webhooksRouter = createRouter({
     ),
 
   listKeys: authedQuery.query(({ ctx }) => listApiKeys(ctx.user.id)),
+  /** True when this account's email is verified (surfaced for the UI). */
+  verificationStatus: authedQuery.query(({ ctx }) => ({
+    emailVerified: Boolean(ctx.user.emailVerifiedAt),
+  })),
 
   revokeKey: authedQuery
     .input(z.object({ id: z.number().int().positive() }))

@@ -36,6 +36,18 @@ export const users = mysqlTable(
     // previously issued tokens (including stolen ones) stop validating
     // immediately instead of living out their 7-day lifetime.
     tokenVersion: int("token_version").notNull().default(0),
+    // Email verification. Null = not verified. Verified is required to mint
+    // long-lived webhook API keys; accounts created through Supabase/Clerk or
+    // before this feature are treated as verified (see migration backfill).
+    emailVerifiedAt: timestamp("email_verified_at"),
+    // SHA-256 hash of the one-time email-verification token (plaintext never
+    // stored) plus its expiry. Cleared after a successful verification.
+    verificationTokenHash: varchar("verification_token_hash", { length: 64 }),
+    verificationTokenExpiresAt: timestamp("verification_token_expires_at"),
+    // SHA-256 hash of the one-time password-reset token plus its expiry.
+    // Cleared after a successful reset; never reusable.
+    resetTokenHash: varchar("reset_token_hash", { length: 64 }),
+    resetTokenExpiresAt: timestamp("reset_token_expires_at"),
     name: varchar("name", { length: 255 }),
     avatar: text("avatar"),
     role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),

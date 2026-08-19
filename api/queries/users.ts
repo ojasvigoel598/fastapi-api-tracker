@@ -177,6 +177,94 @@ export async function bumpTokenVersion(id: number): Promise<void> {
     .where(eq(schema.users.id, id));
 }
 
+// ─── Email verification + password reset ──────────────────────────────
+
+/** Store the hashed verification token and its expiry for a user. */
+export async function storeVerificationToken(
+  id: number,
+  tokenHash: string,
+  expiresAt: Date,
+): Promise<void> {
+  if (env.isDemoMode) {
+    demoStore.storeVerificationToken(id, tokenHash, expiresAt);
+    return;
+  }
+  await getDb()
+    .update(schema.users)
+    .set({ verificationTokenHash: tokenHash, verificationTokenExpiresAt: expiresAt })
+    .where(eq(schema.users.id, id));
+}
+
+/** Store the hashed password-reset token and its expiry for a user. */
+export async function storeResetToken(
+  id: number,
+  tokenHash: string,
+  expiresAt: Date,
+): Promise<void> {
+  if (env.isDemoMode) {
+    demoStore.storeResetToken(id, tokenHash, expiresAt);
+    return;
+  }
+  await getDb()
+    .update(schema.users)
+    .set({ resetTokenHash: tokenHash, resetTokenExpiresAt: expiresAt })
+    .where(eq(schema.users.id, id));
+}
+
+/** Mark a user verified and clear the one-time verification token. */
+export async function markEmailVerified(id: number): Promise<void> {
+  if (env.isDemoMode) {
+    demoStore.markEmailVerified(id);
+    return;
+  }
+  await getDb()
+    .update(schema.users)
+    .set({
+      emailVerifiedAt: new Date(),
+      verificationTokenHash: null,
+      verificationTokenExpiresAt: null,
+    })
+    .where(eq(schema.users.id, id));
+}
+
+/** Clear a used/expired password-reset token (single use). */
+export async function clearResetToken(id: number): Promise<void> {
+  if (env.isDemoMode) {
+    demoStore.clearResetToken(id);
+    return;
+  }
+  await getDb()
+    .update(schema.users)
+    .set({ resetTokenHash: null, resetTokenExpiresAt: null })
+    .where(eq(schema.users.id, id));
+}
+
+/** Find a user by their stored verification-token digest. */
+export async function findUserByVerificationTokenHash(
+  tokenHash: string,
+): Promise<User | undefined> {
+  if (env.isDemoMode) return demoStore.findUserByVerificationTokenHash(tokenHash);
+  const rows = await getDb()
+    .select()
+    .from(schema.users)
+    .where(eq(schema.users.verificationTokenHash, tokenHash))
+    .limit(1);
+  return rows.at(0);
+}
+
+/** Find a user by their stored password-reset-token digest. */
+export async function findUserByResetTokenHash(
+  tokenHash: string,
+): Promise<User | undefined> {
+  if (env.isDemoMode) return demoStore.findUserByResetTokenHash(tokenHash);
+  const rows = await getDb()
+    .select()
+    .from(schema.users)
+    .where(eq(schema.users.resetTokenHash, tokenHash))
+    .limit(1);
+  return rows.at(0);
+}
+
 /**
  * Find or create the local user for a verified Supabase identity (`sub`).
  * Links an existing email/password account to Supabase when the emails match.

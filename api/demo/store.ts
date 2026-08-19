@@ -346,6 +346,13 @@ function seed(): void {
     clerkId: null,
     unionId: null,
     tokenVersion: 0,
+    // The seeded demo account is pre-verified so the dashboard works the
+    // moment someone signs in with the demo credentials.
+    emailVerifiedAt: new Date(),
+    verificationTokenHash: null,
+    verificationTokenExpiresAt: null,
+    resetTokenHash: null,
+    resetTokenExpiresAt: null,
     name: "Demo User",
     avatar: null,
     role: "admin",
@@ -372,6 +379,12 @@ function seed(): void {
       clerkId: null,
       unionId: null,
       tokenVersion: 0,
+      // Owner accounts are provisioned by the operator — pre-verified.
+      emailVerifiedAt: new Date(),
+      verificationTokenHash: null,
+      verificationTokenExpiresAt: null,
+      resetTokenHash: null,
+      resetTokenExpiresAt: null,
       name: env.ownerEmail.split("@")[0] || "Owner",
       avatar: null,
       role: "admin",
@@ -461,6 +474,11 @@ export function createUser(input: NewUserInput): User {
     clerkId: input.clerkId ?? null,
     unionId: null,
     tokenVersion: 0,
+    emailVerifiedAt: null,
+    verificationTokenHash: null,
+    verificationTokenExpiresAt: null,
+    resetTokenHash: null,
+    resetTokenExpiresAt: null,
     name: input.name,
     avatar: null,
     role: input.role ?? "user",
@@ -566,6 +584,65 @@ export function bumpTokenVersion(id: number): void {
   ensureSeeded();
   const user = users.find((u) => u.id === id);
   if (user) user.tokenVersion += 1;
+}
+
+// ─── Email verification + password reset (demo store) ─────────────────
+
+export function storeVerificationToken(
+  id: number,
+  tokenHash: string,
+  expiresAt: Date,
+): void {
+  ensureSeeded();
+  const user = users.find((u) => u.id === id);
+  if (user) {
+    user.verificationTokenHash = tokenHash;
+    user.verificationTokenExpiresAt = expiresAt;
+  }
+}
+
+export function storeResetToken(
+  id: number,
+  tokenHash: string,
+  expiresAt: Date,
+): void {
+  ensureSeeded();
+  const user = users.find((u) => u.id === id);
+  if (user) {
+    user.resetTokenHash = tokenHash;
+    user.resetTokenExpiresAt = expiresAt;
+  }
+}
+
+export function markEmailVerified(id: number): void {
+  ensureSeeded();
+  const user = users.find((u) => u.id === id);
+  if (user) {
+    user.emailVerifiedAt = new Date();
+    user.verificationTokenHash = null;
+    user.verificationTokenExpiresAt = null;
+  }
+}
+
+export function clearResetToken(id: number): void {
+  ensureSeeded();
+  const user = users.find((u) => u.id === id);
+  if (user) {
+    user.resetTokenHash = null;
+    user.resetTokenExpiresAt = null;
+  }
+}
+
+export function findUserByVerificationTokenHash(
+  tokenHash: string,
+): User | undefined {
+  ensureSeeded();
+  return users.find((u) => u.verificationTokenHash === tokenHash);
+}
+
+export function findUserByResetTokenHash(tokenHash: string): User | undefined {
+  ensureSeeded();
+  return users.find((u) => u.resetTokenHash === tokenHash);
 }
 
 // ─── Requests ─────────────────────────────────────────────────────────

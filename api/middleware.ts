@@ -42,5 +42,29 @@ function requireRole(role: string) {
   });
 }
 
+/**
+ * Gate an authenticated procedure on a verified email address. Accounts
+ * created through Supabase/Clerk and pre-existing accounts are verified
+ * (see the migration backfill), so only genuinely unverified local sign-ups
+ * are blocked — the case where an attacker owns the inbox is unproven.
+ */
+const requireVerified = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
+  if (!ctx.user) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: ErrorMessages.unauthenticated,
+    });
+  }
+  if (!ctx.user.emailVerifiedAt) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Email verification required to perform this action.",
+    });
+  }
+  return next({ ctx: { ...ctx, user: ctx.user } });
+});
+
 export const authedQuery = t.procedure.use(requireAuth);
+export const verifiedQuery = authedQuery.use(requireVerified);
 export const adminQuery = authedQuery.use(requireRole("admin"));

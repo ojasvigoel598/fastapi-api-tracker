@@ -19,11 +19,32 @@ export const AUTH_WINDOW_MS = 15 * 60 * 1000;
 export const ACCOUNT_MAX_FAILURES = 5;
 export const IP_MAX_FAILURES = 20;
 
-const accountLimiter = new FixedWindowRateLimiter(
+export const VERIFY_TOKEN_MAX_ATTEMPTS = 10;
+export const RESET_REQUEST_MAX = 3;
+
+export const accountLimiter = new FixedWindowRateLimiter(
   ACCOUNT_MAX_FAILURES,
   AUTH_WINDOW_MS,
 );
-const ipLimiter = new FixedWindowRateLimiter(IP_MAX_FAILURES, AUTH_WINDOW_MS);
+export const ipLimiter = new FixedWindowRateLimiter(IP_MAX_FAILURES, AUTH_WINDOW_MS);
+
+/**
+ * Brute-force guard for the one-time token endpoints (email verification,
+ * resend, password reset): an attacker guessing tokens is limited per IP.
+ */
+export const tokenAttemptLimiter = new FixedWindowRateLimiter(
+  VERIFY_TOKEN_MAX_ATTEMPTS,
+  AUTH_WINDOW_MS,
+);
+
+/**
+ * Rate limit for password-reset *requests*: per account+IP so a victim's
+ * inbox cannot be flooded with reset emails.
+ */
+export const resetRequestLimiter = new FixedWindowRateLimiter(
+  RESET_REQUEST_MAX,
+  AUTH_WINDOW_MS,
+);
 
 /** Best-effort client IP from the standard forwarded header. */
 export function clientIp(headers: Headers): string {
@@ -58,4 +79,30 @@ export function recordAuthFailure(email: string, ip: string): void {
 
 export function clearAuthFailures(email: string): void {
   accountLimiter.clear(accountKey(email));
+}
+
+/** Blocking result when the source IP has spent its one-time-token budget. */
+export function checkTokenAttemptLimit(ip: string): {
+  retryAfterSeconds: number;
+} | null {
+  const result = tokenAttemptLimiter.check(`ip:${ip}`);
+  return result.allowed ? null : { retryAfterSeconds: result.retryAfterSeconds };
+}
+
+/** Record one one-time-token attempt (verify/resend/reset-confirm). */
+export function recordTokenAttempt(ip: string): void {
+  tokenAttemptLimiter.recordFailure(`ip:${ip}`);
+}
+
+/** Blocking result when an account+IP has spent its reset-request budget. */
+export function checkResetRequestLimit(email: string, ip: string): {
+  retryAfterSeconds: number;
+} | null {
+  const result = resetRequestLimiter.check(`${accountKey(email)}:${ip}`);
+  return result.allowed ? null : { retryAfterSeconds: result.retryAfterSeconds };
+}
+
+/** Record one password-reset request for an account+IP. */
+export function recordResetRequest(email: string, ip: string): void {
+  resetRequestLimiter.recordFailure(`${accountKey(email)}:${ip}`);
 }

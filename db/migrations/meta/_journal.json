@@ -36,6 +36,13 @@
       "when": 1787160619997,
       "tag": "0004_breezy_molten_man",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1787160887083,
+      "tag": "0005_third_exiles",
+      "breakpoints": true
     }
   ]
 }

@@ -11,8 +11,25 @@ import {
   clientIp,
   recordAuthFailure,
   clearAuthFailures,
+  checkTokenAttemptLimit,
+  recordTokenAttempt,
+  checkResetRequestLimit,
+  recordResetRequest,
 } from "./lib/auth-rate-limit";
 import { signSessionToken, verifySupabaseToken } from "./auth/session";
+import {
+  hashToken,
+  randomToken,
+  tokenValid,
+  VERIFICATION_TTL_MS,
+  RESET_TTL_MS,
+} from "./auth/tokens";
+import {
+  authEmailAvailable,
+  buildVerificationEmail,
+  buildResetPasswordEmail,
+  sendEmail,
+} from "./lib/email";
 import {
   findUserById,
   findUserByEmail,
@@ -21,6 +38,12 @@ import {
   updateLastSignIn,
   upsertSupabaseUser,
   bumpTokenVersion,
+  storeVerificationToken,
+  storeResetToken,
+  markEmailVerified,
+  clearResetToken,
+  findUserByVerificationTokenHash,
+  findUserByResetTokenHash,
 } from "./queries/users";
 import { createRouter, authedQuery, publicQuery } from "./middleware";
 import type { TrpcContext } from "./context";
@@ -32,6 +55,7 @@ export function toPublicUser(user: User) {
     name: user.name,
     avatar: user.avatar,
     role: user.role,
+    emailVerified: Boolean(user.emailVerifiedAt),
     createdAt: user.createdAt,
     lastSignInAt: user.lastSignInAt,
   };
@@ -91,6 +115,47 @@ async function issueSession(
   return { user: toPublicUser(user), token };
 }
 
+/**
+ * Provision email verification for a fresh sign-up.
+ *
+ * When a verification email can be sent (Resend key + APP_URL configured),
+ * a one-time token is stored (hashed) and emailed; the account stays
+ * unverified until the link is used. Otherwise the account is verified
+ * immediately so a deployment without email infrastructure never locks its
+ * users out. Returns whether a verification email was dispatched.
+ */
+async function provisionEmailVerification(
+  user: User,
+): Promise<{ emailSent: boolean }> {
+  if (!authEmailAvailable()) {
+    await markEmailVerified(user.id);
+    return { emailSent: false };
+  }
+
+  const token = randomToken();
+  await storeVerificationToken(
+    user.id,
+    hashToken(token),
+    new Date(Date.now() + VERIFICATION_TTL_MS),
+  );
+  const result = await sendEmail(
+    buildVerificationEmail({
+      to: user.email,
+      appUrl: env.appUrl,
+      token,
+      expiresInMinutes: VERIFICATION_TTL_MS / 60_000,
+    }),
+  );
+  if (!result.sent) {
+    // Delivery failure is logged internally; the user can use the resend
+    // endpoint once the operator fixes the transport. Never leak the reason.
+    console.error(
+      `[auth] verification email to ${user.email} failed: ${result.reason ?? "unknown"}`,
+    );
+  }
+  return { emailSent: result.sent };
+}
+
 export const authRouter = createRouter({
   /**
    * Public configuration the login screen needs before any session exists.
@@ -112,6 +177,9 @@ export const authRouter = createRouter({
       ? { email: "demo@example.com", password: "demo1234" }
       : null,
     kimiStatus: env.kimiOpenUrl && env.kimiApiKey ? "real" : env.isDemoMode ? "mock" : "not_connected",
+    // True when sign-up emails a one-time verification link (Resend + APP_URL
+    // configured). False deployments auto-verify new accounts.
+    emailVerificationConfigured: authEmailAvailable(),
   })),
 
   me: authedQuery.query(({ ctx }) => toPublicUser(ctx.user)),
@@ -166,7 +234,178 @@ export const authRouter = createRouter({
         passwordSalt: salt,
         role: "user",
       });
-      return issueSession(ctx, user);
+      const { emailSent } = await provisionEmailVerification(user);
+      // Re-read so the session reflects the verification state just set
+      // (auto-verified when no email transport is configured).
+      const fresh = (await findUserById(user.id)) ?? user;
+      const session = await issueSession(ctx, fresh);
+      return { ...session, emailVerificationSent: emailSent };
+    }),
+
+  /**
+   * Complete email verification with the one-time link token. The token is
+   * consumed on success (single use) and expired links are rejected.
+   */
+  verifyEmail: publicQuery
+    .input(z.object({ token: z.string().min(1).max(128) }))
+    .mutation(async ({ ctx, input }) => {
+      const ip = clientIp(ctx.req.headers);
+      const blocked = checkTokenAttemptLimit(ip);
+      if (blocked) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many attempts. Try again in ${blocked.retryAfterSeconds} seconds.`,
+        });
+      }
+      recordTokenAttempt(ip);
+
+      const digest = hashToken(input.token);
+      const user = await findUserByVerificationTokenHash(digest);
+      // Generic failure — never reveal whether the token was well-formed or
+      // which account it belonged to.
+      if (
+        !user ||
+        !tokenValid(user.verificationTokenHash, user.verificationTokenExpiresAt, input.token)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid or expired verification link.",
+        });
+      }
+      await markEmailVerified(user.id);
+      return { success: true };
+    }),
+
+  /**
+   * Re-send the verification email. Always answers success with the same
+   * shape (no account enumeration); only sends when the account exists,
+   * is unverified, and email is configured.
+   */
+  resendVerification: publicQuery
+    .input(z.object({ email: z.string().email().max(320) }))
+    .mutation(async ({ ctx, input }) => {
+      const ip = clientIp(ctx.req.headers);
+      const blocked = checkTokenAttemptLimit(ip);
+      if (blocked) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many attempts. Try again in ${blocked.retryAfterSeconds} seconds.`,
+        });
+      }
+      recordTokenAttempt(ip);
+
+      if (authEmailAvailable()) {
+        const email = input.email.toLowerCase().trim();
+        const user = await findUserByEmail(email);
+        if (user && !user.emailVerifiedAt) {
+          const token = randomToken();
+          await storeVerificationToken(
+            user.id,
+            hashToken(token),
+            new Date(Date.now() + VERIFICATION_TTL_MS),
+          );
+          await sendEmail(
+            buildVerificationEmail({
+              to: user.email,
+              appUrl: env.appUrl,
+              token,
+              expiresInMinutes: VERIFICATION_TTL_MS / 60_000,
+            }),
+          );
+        }
+      }
+      return { success: true };
+    }),
+
+  /**
+   * Start a password reset. Generic response (no account enumeration) and
+   * rate limited per account+IP so a victim's inbox cannot be flooded.
+   */
+  requestPasswordReset: publicQuery
+    .input(z.object({ email: z.string().email().max(320) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!authEmailAvailable()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Password reset is not configured on this server.",
+        });
+      }
+      const email = input.email.toLowerCase().trim();
+      const ip = clientIp(ctx.req.headers);
+      const blocked = checkResetRequestLimit(email, ip);
+      if (blocked) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many reset requests. Try again in ${blocked.retryAfterSeconds} seconds.`,
+        });
+      }
+      recordResetRequest(email, ip);
+
+      const user = await findUserByEmail(email);
+      if (user?.passwordHash) {
+        const token = randomToken();
+        await storeResetToken(
+          user.id,
+          hashToken(token),
+          new Date(Date.now() + RESET_TTL_MS),
+        );
+        await sendEmail(
+          buildResetPasswordEmail({
+            to: user.email,
+            appUrl: env.appUrl,
+            token,
+            expiresInMinutes: RESET_TTL_MS / 60_000,
+          }),
+        );
+      }
+      return { success: true };
+    }),
+
+  /**
+   * Complete a password reset with the one-time link token. The token is
+   * consumed immediately (single use), all sessions are revoked, and the new
+   * password takes effect for future logins.
+   */
+  resetPassword: publicQuery
+    .input(
+      z.object({
+        token: z.string().min(1).max(128),
+        newPassword: z
+          .string()
+          .min(8, "Password must be at least 8 characters")
+          .max(128, "Password must be at most 128 characters"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const ip = clientIp(ctx.req.headers);
+      const blocked = checkTokenAttemptLimit(ip);
+      if (blocked) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many attempts. Try again in ${blocked.retryAfterSeconds} seconds.`,
+        });
+      }
+      recordTokenAttempt(ip);
+
+      const digest = hashToken(input.token);
+      const user = await findUserByResetTokenHash(digest);
+      if (
+        !user ||
+        !tokenValid(user.resetTokenHash, user.resetTokenExpiresAt, input.token)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid or expired reset link.",
+        });
+      }
+
+      const { salt, hash } = hashPassword(input.newPassword);
+      await setUserPassword(user.id, hash, salt);
+      // Revoke every existing session: a reset implies the previous
+      // credentials (and anything minted with them) are untrusted.
+      await bumpTokenVersion(user.id);
+      await clearResetToken(user.id);
+      return { success: true };
     }),
 
   login: publicQuery
@@ -236,7 +475,12 @@ export const authRouter = createRouter({
       return issueSession(ctx, user);
     }),
 
-  resetPassword: publicQuery
+  /**
+   * Supabase-hosted password reset (GoTrue "recover"). Kept as its own
+   * procedure — the local-auth flow uses `requestPasswordReset` +
+   * `resetPassword` with a one-time token instead.
+   */
+  requestSupabasePasswordReset: publicQuery
     .input(z.object({ email: z.string().email().max(320) }))
     .mutation(async ({ input }) => {
       if (!env.isSupabaseMode) {

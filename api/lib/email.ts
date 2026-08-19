@@ -29,6 +29,62 @@ export function emailConfigured(): boolean {
 }
 
 /**
+ * Email verification and password reset become available only when both the
+ * transport (Resend key) and a public base URL (to build the clickable link)
+ * are configured. Without either, the app auto-verifies new sign-ups.
+ */
+export function authEmailAvailable(): boolean {
+  return Boolean(env.resendApiKey && env.appUrl);
+}
+
+/**
+ * Build the email-verification message. The link points at the app's own
+ * verification page, which calls `auth.verifyEmail` with the one-time token.
+ */
+export function buildVerificationEmail(input: {
+  to: string;
+  appUrl: string;
+  token: string;
+  expiresInMinutes: number;
+}): UsageAlertEmail {
+  const link = `${input.appUrl.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(input.token)}`;
+  return {
+    to: input.to,
+    subject: "Verify your email address",
+    html: [
+      `<h2>Welcome to the API Tracker</h2>`,
+      `<p>Please confirm this email address to activate your account.</p>`,
+      `<p><a href="${escapeHtml(link)}">Verify my email</a></p>`,
+      `<p>This link expires in ${input.expiresInMinutes} minutes and can be used once.</p>`,
+      `<p>If you did not create an account, you can safely ignore this email.</p>`,
+    ].join("\n"),
+  };
+}
+
+/**
+ * Build the password-reset message with a one-time reset link.
+ */
+export function buildResetPasswordEmail(input: {
+  to: string;
+  appUrl: string;
+  token: string;
+  expiresInMinutes: number;
+}): UsageAlertEmail {
+  const link = `${input.appUrl.replace(/\/$/, "")}/reset-password?token=${encodeURIComponent(input.token)}`;
+  return {
+    to: input.to,
+    subject: "Reset your password",
+    html: [
+      `<h2>Password reset requested</h2>`,
+      `<p>Click the link below to choose a new password for your account.</p>`,
+      `<p><a href="${escapeHtml(link)}">Reset my password</a></p>`,
+      `<p>This link expires in ${input.expiresInMinutes} minutes and can be used once.</p>`,
+      `<p>If you did not request this, you can safely ignore this email — your password stays the same.</p>`,
+    ].join("\n"),
+  };
+}
+
+/**
  * Build the human-readable email for a usage-limit threshold alert.
  */
 export function buildUsageAlertEmail(input: {
