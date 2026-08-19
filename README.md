@@ -1,6 +1,7 @@
 # API Monitoring & Admin Dashboard
 
 ![CI](https://github.com/ojasvigoel598/fastapi-api-tracker/actions/workflows/ci.yml/badge.svg)
+![PR Checks](https://github.com/ojasvigoel598/fastapi-api-tracker/actions/workflows/pr.yml/badge.svg)
 [![Docker](https://ghcr-badge.egpl.dev/ojasvigoel598/fastapi-api-tracker/latest_tag?label=docker&color=%2344cc11)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
 [![Docker pulls](https://ghcr-badge.elias.eu.org/shield/ojasvigoel598/fastapi-api-tracker)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
 [![Docker size](https://ghcr-badge.egpl.dev/ojasvigoel598/fastapi-api-tracker/size?tag=latest&label=image%20size&color=%2344cc11)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
