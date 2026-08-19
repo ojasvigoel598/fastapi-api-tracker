@@ -46,7 +46,7 @@ docker compose up --build   # app → http://localhost:3000
 
 ## 📸 Demo
 
-![Dashboard — KPI cards, request-volume chart, status codes, insights](docs/screenshots/02-dashboard.png)
+![API Monitor demo — login, dashboard, analytics, endpoints, alerts, limits, webhooks](docs/demo.gif)
 
 The dashboard is live-updating: every 10s it re-polls, so telemetry pushed through the webhook appears without a manual refresh.
 
