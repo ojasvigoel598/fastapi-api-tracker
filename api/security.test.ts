@@ -69,6 +69,28 @@ describe("bounded body reader (chunked/unknown-length bodies)", () => {
   });
 });
 
+describe("security headers", () => {
+  it("sets baseline headers on every response", async () => {
+    const { default: app } = await import("./boot");
+    const res = await app.request("/api/health");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(res.headers.get("permissions-policy")).toContain("camera=()");
+  });
+
+  it("emits HSTS only when the request arrives over HTTPS", async () => {
+    const { default: app } = await import("./boot");
+    const plain = await app.request("/api/health");
+    expect(plain.headers.get("strict-transport-security")).toBeNull();
+    const secure = await app.request("/api/health", {
+      headers: { "x-forwarded-proto": "https" },
+    });
+    expect(secure.headers.get("strict-transport-security")).toBe(
+      "max-age=31536000; includeSubDomains",
+    );
+  });
+});
+
 describe("input caps (resource exhaustion)", () => {
   it("rejects an ingest with too many request headers", () => {
     const headers: Record<string, string> = {};

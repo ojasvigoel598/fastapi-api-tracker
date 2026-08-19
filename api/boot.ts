@@ -19,6 +19,29 @@ if (env.isDemoMode) {
 const app = new Hono<{ Bindings: HttpBindings }>();
 
 /**
+ * Baseline security headers for every response.
+ *
+ * X-Frame-Options is intentionally NOT set to DENY/SAMEORIGIN: the app is
+ * designed to run inside a hosted-preview iframe (and sets SameSite=None
+ * cookies for exactly that context), so blocking framing would break the
+ * preview. HSTS is only emitted over HTTPS so plain-HTTP local/dev
+ * deployments never tell a browser to upgrade them into a broken state.
+ */
+app.use(async (c, next) => {
+  await next();
+  c.res.headers.set("x-content-type-options", "nosniff");
+  c.res.headers.set("referrer-policy", "strict-origin-when-cross-origin");
+  c.res.headers.set(
+    "permissions-policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+  );
+  if (c.req.header("x-forwarded-proto") === "https") {
+    c.res.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+  }
+  return c.res;
+});
+
+/**
  * Reject oversized request bodies without touching the body stream.
  *
  * Hono's `bodyLimit` middleware reconstructs the request with
