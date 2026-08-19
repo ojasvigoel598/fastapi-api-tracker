@@ -31,44 +31,56 @@ function assert(cond: unknown, msg: string): asserts cond {
 
 // ── 1) Obtain a real MySQL server ──────────────────────────────────────
 let server: Awaited<ReturnType<typeof createDB>> | null = null;
-let cfg: { host: string; port: number; user: string; password: string; database: string };
 
+// A single canonical URL drives every connection in this harness. For an
+// external (hosted) database the ORIGINAL URL is kept verbatim — including
+// `?ssl-mode=REQUIRED` and `?connectionLimit=` — because TiDB Cloud and
+// Aiven reject non-TLS connections and mysql2's own URL parser ignores
+// ssl-mode. poolOptionsFromUrl() (the same parser the app uses) extracts
+// those options, and DATABASE_URL handed to the app is the untouched URL.
 const externalUrl = process.env.MYSQL_E2E_URL;
-if (externalUrl) {
-  const u = new URL(externalUrl);
-  cfg = {
-    host: u.hostname,
-    port: Number(u.port || 3306),
-    user: decodeURIComponent(u.username || "root"),
-    password: decodeURIComponent(u.password || ""),
-    database: decodeURIComponent(u.pathname.replace(/^\//, "")) || "mysql",
-  };
-  console.log(
-    `[mysql-e2e] using external MySQL: ${cfg.host}:${cfg.port}/${cfg.database} (user=${cfg.user})`,
-  );
-} else {
+if (!externalUrl) {
   server = await createDB();
-  cfg = {
-    host: "127.0.0.1",
-    port: server.port,
-    user: server.username,
-    password: "",
-    database: server.dbName,
-  };
-  console.log(
-    `[mysql-e2e] ephemeral MySQL up: ${cfg.host}:${cfg.port}/${cfg.database} (user=${cfg.user}, pwd='')`,
-  );
 }
+const dbUrl =
+  externalUrl ??
+  `mysql://${server!.username}@127.0.0.1:${server!.port}/${server!.dbName}`;
+
+// Parse the URL into connection options, mirroring api/queries/connection.ts
+// (poolOptionsFromUrl). This harness intentionally does NOT import that
+// module: it transitively evaluates api/lib/env.ts, which snapshots
+// process.env at module-load time — before DATABASE_URL is set here — and
+// the cached module would make the app boot in demo mode.
+const u = new URL(dbUrl);
+const options: mysql.PoolOptions = {
+  host: u.hostname,
+  port: Number(u.port || 3306),
+  user: decodeURIComponent(u.username || "root"),
+  password: decodeURIComponent(u.password || ""),
+  database: decodeURIComponent(u.pathname.replace(/^\//, "")) || "mysql",
+};
+const sslMode = u.searchParams.get("ssl-mode")?.toUpperCase();
+if (sslMode && sslMode !== "DISABLED") {
+  options.ssl =
+    sslMode === "VERIFY_CA" || sslMode === "VERIFY_IDENTITY"
+      ? { rejectUnauthorized: true }
+      : { rejectUnauthorized: false };
+}
+const cfg = {
+  host: options.host as string,
+  port: options.port as number,
+  user: options.user as string,
+  password: (options.password as string) ?? "",
+  database: options.database as string,
+};
+console.log(
+  externalUrl
+    ? `[mysql-e2e] using external MySQL: ${cfg.host}:${cfg.port}/${cfg.database} (user=${cfg.user}, ssl=${options.ssl ? "on" : "off"})`
+    : `[mysql-e2e] ephemeral MySQL up: ${cfg.host}:${cfg.port}/${cfg.database} (user=${cfg.user}, pwd='')`,
+);
 
 // ── 2) Apply real migrations ───────────────────────────────────────────
-const conn = await mysql.createConnection({
-  host: cfg.host,
-  port: cfg.port,
-  user: cfg.user,
-  password: cfg.password,
-  database: cfg.database,
-  multipleStatements: true,
-});
+const conn = await mysql.createConnection({ ...options, multipleStatements: true });
 await migrate(drizzle(conn, { mode: "default" }), { migrationsFolder: "./db/migrations" });
 console.log("[mysql-e2e] migrations applied");
 
@@ -82,7 +94,9 @@ for (const t of ["users", "api_requests", "alerts", "api_keys"]) {
 await conn.end();
 
 // ── 3) Boot the app against the real database ──────────────────────────
-process.env.DATABASE_URL = `mysql://${cfg.user}:${encodeURIComponent(cfg.password)}@${cfg.host}:${cfg.port}/${cfg.database}`;
+// Pass the canonical URL through unchanged so ssl-mode/connectionLimit
+// survive into the app's pool (hosted free tiers REQUIRE TLS).
+process.env.DATABASE_URL = dbUrl;
 process.env.APP_SECRET = "mysql-e2e-test-secret-0123456789";
 process.env.NODE_ENV = "production";
 process.env.VERCEL = "1"; // skip long-lived serve(); drive app.fetch directly
@@ -230,14 +244,9 @@ assert(bad.status === 401, `bad-key ingest ${bad.status}`);
 console.log("[mysql-e2e] bad-key webhook -> 401");
 
 // ── 7b) RATE-LIMIT HARDENING: concurrent webhook ingests vs real MySQL ──
-// Separate connection for direct SQL assertions in this section.
-const check2 = await mysql.createConnection({
-  host: cfg.host,
-  port: cfg.port,
-  user: cfg.user,
-  password: cfg.password,
-  database: cfg.database,
-});
+// Separate connection for direct SQL assertions in this section (TLS too,
+// via the same canonical URL options).
+const check2 = await mysql.createConnection({ ...options });
 
 // Configure a hard daily limit on a fresh endpoint, then fire many webhook
 // ingests at once. The MySQL path enforces atomically (row lock + transaction
