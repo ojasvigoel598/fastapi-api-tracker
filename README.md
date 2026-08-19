@@ -311,6 +311,48 @@ The runtime image ships only production dependencies and the built bundle; a
 commented-out `seed` service in `docker-compose.yml` can optionally provision the
 owner admin account (`OWNER_EMAIL` / `OWNER_PASSWORD`).
 
+## FastAPI deployment (Python-first option)
+
+For teams that prefer a Python deployment stack, `server.py` wraps the Hono
+backend behind a **FastAPI + uvicorn** process.  The Node server runs as a
+managed subprocess; FastAPI proxies `/api/*` to it and serves the built React
+SPA directly.
+
+```bash
+# 1. Build the frontend + backend first:
+npm run build
+
+# 2. Start with FastAPI:
+pip install -r requirements.txt
+uvicorn server:app --host 0.0.0.0 --port 8000
+# → http://localhost:8000
+```
+
+Or via Docker (single image, Python base):
+
+```bash
+docker build -f Dockerfile.fastapi -t tracker-fastapi .
+docker run -p 8000:8000 tracker-fastapi
+```
+
+Or via Docker Compose (MySQL + migrations + FastAPI server):
+
+```bash
+docker compose -f docker-compose.fastapi.yml up --build
+# → http://localhost:8000
+```
+
+**Environment variables** — the same as the Node.js deployment (see
+`.env.example`).  The FastAPI server reads `PORT` (default `8000`),
+`NODE_INTERNAL_PORT` (default `3001`, internal Node subprocess port), and
+`CORS_ORIGINS` (comma-separated allowed origins).
+
+**How it works:** FastAPI spawns `node dist/boot.js` on the internal port,
+polls its `/api/health` until healthy, then reverse-proxies every `/api/*`
+request to it with streaming.  The React SPA is served from `dist/public/`
+via Starlette's `StaticFiles`.  FastAPI's own `/health` endpoint reports
+Node subprocess status without depending on it.
+
 ## Deploy to Vercel
 
 This repo ships a **Vercel Build Output API** deployment (`vercel.json` +
