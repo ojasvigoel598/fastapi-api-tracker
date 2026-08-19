@@ -305,8 +305,12 @@ export const monitoringRouter = createRouter({
         ]),
         severity: z.enum(["critical", "warning", "info"]).optional().default("warning"),
         endpoint: z.string().optional(),
-        message: z.string().min(1),
-        details: z.record(z.string(), z.unknown()).optional(),
+        message: z.string().min(1).max(2_000),
+        // Bounded so a hostile client cannot stash an unbounded object in a row.
+        details: z
+          .record(z.string().min(1).max(200), z.unknown())
+          .refine((d) => Object.keys(d).length <= 50, "details supports at most 50 entries")
+          .optional(),
       }),
     )
     .mutation(({ input, ctx }) =>

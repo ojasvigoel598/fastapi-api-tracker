@@ -114,8 +114,13 @@ export const authRouter = createRouter({
   register: publicQuery
     .input(
       z.object({
-        email: z.string().email(),
-        password: z.string().min(8, "Password must be at least 8 characters"),
+        email: z.string().email().max(320),
+        // Max length prevents a scrypt CPU/memory DoS from an absurdly long
+        // password (scrypt cost scales with input size).
+        password: z
+          .string()
+          .min(8, "Password must be at least 8 characters")
+          .max(128, "Password must be at most 128 characters"),
         name: z.string().min(1).max(100).optional(),
       }),
     )
@@ -162,8 +167,8 @@ export const authRouter = createRouter({
   login: publicQuery
     .input(
       z.object({
-        email: z.string().email(),
-        password: z.string().min(1),
+        email: z.string().email().max(320),
+        password: z.string().min(1).max(128),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -227,7 +232,7 @@ export const authRouter = createRouter({
     }),
 
   resetPassword: publicQuery
-    .input(z.object({ email: z.string().email() }))
+    .input(z.object({ email: z.string().email().max(320) }))
     .mutation(async ({ input }) => {
       if (!env.isSupabaseMode) {
         throw new TRPCError({
@@ -256,8 +261,11 @@ export const authRouter = createRouter({
   changePassword: authedQuery
     .input(
       z.object({
-        currentPassword: z.string().min(1),
-        newPassword: z.string().min(8, "Password must be at least 8 characters"),
+        currentPassword: z.string().min(1).max(128),
+        newPassword: z
+          .string()
+          .min(8, "Password must be at least 8 characters")
+          .max(128, "Password must be at most 128 characters"),
       }),
     )
     .mutation(async ({ ctx, input }) => {

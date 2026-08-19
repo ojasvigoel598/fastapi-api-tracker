@@ -3,6 +3,20 @@ import { Session } from "@contracts/constants";
 import { authenticateRequest } from "./context";
 import { enforceAndRecord, getUsageLimit } from "./queries/usage";
 
+// Bounds for map-typed inputs so a hostile client cannot exhaust memory by
+// sending a huge JSON object (an unbounded z.record would happily accept
+// tens of thousands of keys). Values are capped in both count and size.
+const MAX_HEADERS = 50;
+const MAX_HEADER_KEY_LEN = 200;
+const MAX_HEADER_VALUE_LEN = 2_000;
+
+export const headersMapSchema = z
+  .record(z.string().trim().min(1).max(MAX_HEADER_KEY_LEN), z.string().max(MAX_HEADER_VALUE_LEN))
+  .refine(
+    (headers) => Object.keys(headers).length <= MAX_HEADERS,
+    `requestHeaders supports at most ${MAX_HEADERS} entries`,
+  );
+
 export const ingestSchema = z.object({
   endpoint: z.string().trim().min(1).max(500),
   method: z.string().trim().min(1).max(10).transform((value) => value.toUpperCase()),
@@ -10,7 +24,7 @@ export const ingestSchema = z.object({
   latencyMs: z.number().int().min(0).max(86_400_000),
   responseSize: z.number().int().min(0).max(2_147_483_647).optional(),
   errorMessage: z.string().max(10_000).optional(),
-  requestHeaders: z.record(z.string(), z.string()).optional(),
+  requestHeaders: headersMapSchema.optional(),
   cost: z.number().min(0).optional(),
 });
 
