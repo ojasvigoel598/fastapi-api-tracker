@@ -10,11 +10,13 @@
 
 import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { apiRequests, alerts } from "@db/schema";
 import { clearWebhookDeliveries } from "./queries/webhook-deliveries";
 import { env } from "./lib/env";
+import { consumeApiLimit, requestIp, apiLimitLabel } from "./lib/api-rate-limit";
 import * as demoStore from "./demo/store";
 
 const ENDPOINTS = [
@@ -172,6 +174,13 @@ export const seedRouter = createRouter({
         .optional()
     )
     .mutation(async ({ input, ctx }) => {
+      const limit = consumeApiLimit("seed", `user:${ctx.user.id}`, requestIp(ctx.req.headers));
+      if (!limit.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Demo-data generation is limited to ${apiLimitLabel("seed")}. Try again shortly.`,
+        });
+      }
       if (env.isDemoMode) {
         demoStore.reseed(ctx.user.id);
         const now = Date.now();

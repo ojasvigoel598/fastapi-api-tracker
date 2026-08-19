@@ -18,6 +18,7 @@
 
 import { z } from "zod";
 import { readJsonBounded } from "./lib/body";
+import { consumeApiLimit, requestIp, apiLimitLabel } from "./lib/api-rate-limit";
 import { findUserByApiKey, touchApiKey } from "./queries/api-keys";
 import {
   getWebhookDelivery,
@@ -160,6 +161,22 @@ export async function handleWebhookIngest(request: Request): Promise<Response> {
   if (!auth.ok) return auth.response;
   const owner = auth.owner;
 
+  // Abuse guard: bound how fast a single key (or source IP) can push
+  // telemetry, independent of the per-endpoint usage limits configured by
+  // the owner. A leaked or brute-forced key can therefore never be used to
+  // flood the database.
+  const limit = consumeApiLimit("webhook", `key:${owner.keyId}`, requestIp(request.headers));
+  if (!limit.allowed) {
+    return json(
+      {
+        error: "Rate limit exceeded",
+        message: `Webhook ingest is limited to ${apiLimitLabel("webhook")}. Try again shortly.`,
+      },
+      429,
+      { "retry-after": String(limit.retryAfterSeconds) },
+    );
+  }
+
   const read = await readJsonBounded(request);
   if (!read.ok) {
     return json(
@@ -215,6 +232,18 @@ export async function handleWebhookReplay(request: Request): Promise<Response> {
   const auth = await authenticate(request);
   if (!auth.ok) return auth.response;
   const owner = auth.owner;
+
+  const limit = consumeApiLimit("replay", `key:${owner.keyId}`, requestIp(request.headers));
+  if (!limit.allowed) {
+    return json(
+      {
+        error: "Rate limit exceeded",
+        message: `Webhook replay is limited to ${apiLimitLabel("replay")}. Try again shortly.`,
+      },
+      429,
+      { "retry-after": String(limit.retryAfterSeconds) },
+    );
+  }
 
   const url = new URL(request.url);
   const id = Number(url.pathname.split("/").at(-1));

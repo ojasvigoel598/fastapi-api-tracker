@@ -16,8 +16,10 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { TIME_RANGES } from "./queries/time-range";
 import { createRouter, authedQuery } from "./middleware";
+import { consumeApiLimit, requestIp, apiLimitLabel } from "./lib/api-rate-limit";
 import {
   getOverviewMetrics,
   getRequestLogs,
@@ -256,8 +258,15 @@ export const monitoringRouter = createRouter({
           .optional(),
       }),
     )
-    .query(({ input, ctx }) =>
-      exportRequests(
+    .query(({ input, ctx }) => {
+      const limit = consumeApiLimit("export", `user:${ctx.user.id}`, requestIp(ctx.req.headers));
+      if (!limit.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Export is limited to ${apiLimitLabel("export")}. Try again shortly.`,
+        });
+      }
+      return exportRequests(
         {
           ...(input.filters ?? {}),
           startDate: date(input.filters?.startDate),
@@ -265,8 +274,8 @@ export const monitoringRouter = createRouter({
         } as RequestFilters,
         input.format,
         ctx.user.id,
-      ),
-    ),
+      );
+    }),
 
   // ─── Create Request Log (for demo/mocking) ────────────────────────
 
