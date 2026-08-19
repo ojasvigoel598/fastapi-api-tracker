@@ -57,6 +57,8 @@ The dashboard is live-updating: every 10s it re-polls, so telemetry pushed throu
 | ![Alerts list](docs/screenshots/06-alerts.png) | ![Limits & rate limiting](docs/screenshots/07-limits.png) |
 | ![Webhooks with API keys and deliveries](docs/screenshots/08-webhooks.png) | |
 
+> **Want a fresh recording?** Run `node scripts/capture-demo.mjs` to recapture all screenshots and generate an animated GIF from the live app (requires Chrome).
+
 ---
 
 ## 🕹️ How to use it (first 5 minutes)
