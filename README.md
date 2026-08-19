@@ -265,6 +265,22 @@ database. Both options below are genuinely free (no credit card) and work
 with this repo out of the box — the app parses the `?ssl-mode=` /
 `?connectionLimit=` params straight from the connection string.
 
+**The same connection string drives every layer.** Once you have a
+TiDB/Aiven URL, wire it everywhere with one command:
+
+```bash
+MYSQL_URL="mysql://user:pass@host:4000/db?ssl-mode=REQUIRED" npm run db:setup
+```
+
+That validates the URL, applies the Drizzle migrations (with retry/backoff
+for slow-to-wake free instances), and writes a gitignored `.env.local` with
+`DATABASE_URL` + a generated `APP_SECRET` — so the local preview
+(`npm run dev`) serves **real storage** instead of the in-memory demo
+(`/api/health` then reports `mode=production`). To make CI run its real-MySQL
+e2e against the **same persistent database** (instead of the ephemeral
+`mysql:8.4` service container), add the URL as a `MYSQL_E2E_URL` Actions
+secret — the CI job prefers it and falls back to the container when unset.
+
 ### TiDB Cloud Serverless (recommended)
 
 MySQL-compatible, **serverless** (scales to zero when idle — no connection
@@ -350,7 +366,11 @@ can't — e.g. the p95 window-function query or timestamp precision. It also
 proves **rate-limit hardening**: it configures a hard daily limit, fires a
 burst of concurrent webhook ingests against the real database, and asserts
 exactly the allowed number pass (no over-counting under the row-lock
-transaction).
+transaction). By default it runs against an ephemeral `mysql:8.4` service
+container; set a `MYSQL_E2E_URL` Actions secret (TiDB Cloud / Aiven free
+tier — see [Free MySQL database](#free-mysql-database)) and CI runs the e2e
+against that **persistent** database instead, and the job summary says which
+storage each run used.
 
 On every push to `main`, an additional **`deploy-vercel`** job (see
 [Deploy to Vercel](#deploy-to-vercel)) builds the production output and
