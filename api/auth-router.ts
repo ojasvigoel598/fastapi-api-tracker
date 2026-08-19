@@ -20,6 +20,7 @@ import {
   setUserPassword,
   updateLastSignIn,
   upsertSupabaseUser,
+  bumpTokenVersion,
 } from "./queries/users";
 import { createRouter, authedQuery, publicQuery } from "./middleware";
 import type { TrpcContext } from "./context";
@@ -81,7 +82,11 @@ async function issueSession(
   ctx: TrpcContext,
   user: User,
 ): Promise<SessionIssueResult> {
-  const token = await signSessionToken({ userId: user.id, email: user.email });
+  const token = await signSessionToken({
+    userId: user.id,
+    email: user.email,
+    tokenVersion: user.tokenVersion,
+  });
   setSessionCookie(ctx, token);
   return { user: toPublicUser(user), token };
 }
@@ -284,10 +289,17 @@ export const authRouter = createRouter({
       }
       const { salt, hash } = hashPassword(input.newPassword);
       await setUserPassword(user.id, hash, salt);
+      // Revoke every other session (including this one's prior tokens) so a
+      // password change immediately kills any session minted with the old
+      // credentials — including stolen ones.
+      await bumpTokenVersion(user.id);
       return { success: true };
     }),
 
-  logout: authedQuery.mutation(({ ctx }) => {
+  logout: authedQuery.mutation(async ({ ctx }) => {
+    // Revoke all outstanding session tokens (bearer + cookie) so a logged-out
+    // token cannot be replayed for the rest of its 7-day lifetime.
+    await bumpTokenVersion(ctx.user.id);
     clearSessionCookie(ctx);
     return { success: true };
   }),

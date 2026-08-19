@@ -345,6 +345,7 @@ function seed(): void {
     supabaseId: null,
     clerkId: null,
     unionId: null,
+    tokenVersion: 0,
     name: "Demo User",
     avatar: null,
     role: "admin",
@@ -370,6 +371,7 @@ function seed(): void {
       supabaseId: null,
       clerkId: null,
       unionId: null,
+      tokenVersion: 0,
       name: env.ownerEmail.split("@")[0] || "Owner",
       avatar: null,
       role: "admin",
@@ -458,6 +460,7 @@ export function createUser(input: NewUserInput): User {
     supabaseId: input.supabaseId ?? null,
     clerkId: input.clerkId ?? null,
     unionId: null,
+    tokenVersion: 0,
     name: input.name,
     avatar: null,
     role: input.role ?? "user",
@@ -552,6 +555,17 @@ export function setUserPassword(
     user.passwordSalt = passwordSalt;
     user.updatedAt = new Date();
   }
+}
+
+/**
+ * Invalidate every session token issued before now by bumping the user's
+ * token version. Call on logout and after a password change so stolen or
+ * pre-revocation tokens stop validating immediately.
+ */
+export function bumpTokenVersion(id: number): void {
+  ensureSeeded();
+  const user = users.find((u) => u.id === id);
+  if (user) user.tokenVersion += 1;
 }
 
 // ─── Requests ─────────────────────────────────────────────────────────

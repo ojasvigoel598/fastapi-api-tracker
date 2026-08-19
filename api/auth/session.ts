@@ -6,6 +6,12 @@ const JWT_ALG = "HS256";
 export type SessionPayload = {
   userId: number;
   email: string;
+  /**
+   * Session-revocation version. Tokens minted before a logout or password
+   * change carry a stale value and are rejected by `authenticateRequest`,
+   * which compares this claim against the user's current `tokenVersion`.
+   */
+  tokenVersion: number;
 };
 
 /**
@@ -32,9 +38,15 @@ export async function verifySessionToken(
     const { payload } = await jose.jwtVerify(token, secret, {
       algorithms: [JWT_ALG],
     });
-    const { userId, email } = payload;
+    const { userId, email, tokenVersion } = payload;
     if (typeof userId !== "number" || typeof email !== "string") return null;
-    return { userId, email };
+    return {
+      userId,
+      email,
+      // Tokens issued before this field existed carry no version and are
+      // treated as version 0, matching fresh accounts.
+      tokenVersion: typeof tokenVersion === "number" ? tokenVersion : 0,
+    };
   } catch {
     return null;
   }

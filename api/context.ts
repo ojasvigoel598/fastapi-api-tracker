@@ -71,7 +71,9 @@ export async function authenticateRequest(
       const claim = await verifySessionToken(token);
       if (claim) {
         const user = await findUserById(claim.userId);
-        if (user) return user;
+        // Reject tokens minted before the user's last logout / password
+        // change: a stale `tokenVersion` means the session was revoked.
+        if (user && claim.tokenVersion === user.tokenVersion) return user;
       }
     }
   }
@@ -82,7 +84,9 @@ export async function authenticateRequest(
   if (!cookieToken) return undefined;
   const claim = await verifySessionToken(cookieToken);
   if (!claim) return undefined;
-  return findUserById(claim.userId);
+  const user = await findUserById(claim.userId);
+  if (user && claim.tokenVersion === user.tokenVersion) return user;
+  return undefined;
 }
 
 export async function createContext(

@@ -84,10 +84,15 @@ describe("app router", () => {
     const { signSessionToken, verifySessionToken } = await import(
       "./auth/session"
     );
-    const token = await signSessionToken({ userId: 7, email: "a@b.co" });
+    const token = await signSessionToken({
+      userId: 7,
+      email: "a@b.co",
+      tokenVersion: 3,
+    });
     expect(await verifySessionToken(token)).toEqual({
       userId: 7,
       email: "a@b.co",
+      tokenVersion: 3,
     });
     expect(await verifySessionToken("garbage")).toBeNull();
   });
@@ -368,5 +373,112 @@ describe("app router", () => {
       headers: { authorization: "Bearer not-a-real-token" },
     });
     expect(badRes.status).toBe(401);
+  });
+
+  it("revokes the bearer token on logout (stolen token dies immediately)", async () => {
+    const { default: app } = await import("./boot");
+
+    const login = await app.request("/api/trpc/auth.login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        json: { email: "demo@example.com", password: "demo1234" },
+      }),
+    });
+    expect(login.status).toBe(200);
+    const loginBody = (await login.json()) as {
+      result: { data: { json: { token: string } } };
+    };
+    const token = loginBody.result.data.json.token;
+
+    const me = await app.request("/api/trpc/auth.me", {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.status).toBe(200);
+
+    const logout = await app.request("/api/trpc/auth.logout", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ json: null }),
+    });
+    expect(logout.status).toBe(200);
+
+    // The exact same token is now rejected: logout revokes the session
+    // instead of merely clearing the cookie.
+    const after = await app.request("/api/trpc/auth.me", {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(after.status).toBe(401);
+  });
+
+  it("password change revokes every previously issued session", async () => {
+    const { default: app } = await import("./boot");
+    const email = `revoke-${Date.now()}@example.com`;
+
+    const register = await app.request("/api/trpc/auth.register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        json: { email, password: "password123" },
+      }),
+    });
+    expect(register.status).toBe(200);
+    const registerBody = (await register.json()) as {
+      result: { data: { json: { token: string } } };
+    };
+    const token1 = registerBody.result.data.json.token;
+
+    const login = await app.request("/api/trpc/auth.login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ json: { email, password: "password123" } }),
+    });
+    expect(login.status).toBe(200);
+    const loginBody = (await login.json()) as {
+      result: { data: { json: { token: string } } };
+    };
+    const token2 = loginBody.result.data.json.token;
+
+    const change = await app.request("/api/trpc/auth.changePassword", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token2}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        json: { currentPassword: "password123", newPassword: "newpassword456" },
+      }),
+    });
+    expect(change.status).toBe(200);
+
+    // Both the register-issued and the login-issued tokens are dead.
+    for (const token of [token1, token2]) {
+      const me = await app.request("/api/trpc/auth.me", {
+        method: "GET",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(me.status).toBe(401);
+    }
+
+    // A fresh login with the new password works and issues a live session.
+    const relogin = await app.request("/api/trpc/auth.login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ json: { email, password: "newpassword456" } }),
+    });
+    expect(relogin.status).toBe(200);
+    const reloginBody = (await relogin.json()) as {
+      result: { data: { json: { token: string } } };
+    };
+    const freshMe = await app.request("/api/trpc/auth.me", {
+      method: "GET",
+      headers: { authorization: `Bearer ${reloginBody.result.data.json.token}` },
+    });
+    expect(freshMe.status).toBe(200);
   });
 });

@@ -31,6 +31,11 @@ export const users = mysqlTable(
     // Legacy Kimi OAuth union id — no longer used for login, kept for optional
     // Kimi linking.
     unionId: varchar("unionId", { length: 255 }).unique(),
+    // Session revocation version: every issued session token carries the
+    // user's current value, and logout / password change bumps it, so all
+    // previously issued tokens (including stolen ones) stop validating
+    // immediately instead of living out their 7-day lifetime.
+    tokenVersion: int("token_version").notNull().default(0),
     name: varchar("name", { length: 255 }),
     avatar: text("avatar"),
     role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),

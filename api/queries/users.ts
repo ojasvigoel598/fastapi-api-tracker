@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import * as schema from "@db/schema";
 import type { User } from "@db/schema";
 import { getDb } from "./connection";
@@ -158,6 +158,22 @@ export async function setUserPassword(
   await getDb()
     .update(schema.users)
     .set({ passwordHash, passwordSalt })
+    .where(eq(schema.users.id, id));
+}
+
+/**
+ * Invalidate all previously issued session tokens by bumping the user's
+ * token version. Logout and password changes call this so stolen tokens die
+ * immediately instead of living out their 7-day lifetime.
+ */
+export async function bumpTokenVersion(id: number): Promise<void> {
+  if (env.isDemoMode) {
+    demoStore.bumpTokenVersion(id);
+    return;
+  }
+  await getDb()
+    .update(schema.users)
+    .set({ tokenVersion: sql`${schema.users.tokenVersion} + 1` })
     .where(eq(schema.users.id, id));
 }
 
