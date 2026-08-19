@@ -84,5 +84,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Prefer the persistent hosted database (TiDB Cloud / Aiven free
+      # tier) when the MYSQL_E2E_URL secret is configured — the e2e then
+      # runs against the same real storage the preview and production use.
+      # Without the secret it falls back to the ephemeral mysql:8.4 service
+      # container above, so PR checks stay green out of the box.
       - name: Run real-MySQL end-to-end harness
-        run: MYSQL_E2E_URL="mysql://root:root@127.0.0.1:3306/app" npm run db:e2e
+        env:
+          MYSQL_E2E_URL: ${{ secrets.MYSQL_E2E_URL }}
+        run: |
+          if [ -n "$MYSQL_E2E_URL" ]; then
+            echo "### Storage: persistent MySQL (MYSQL_E2E_URL secret)" >> "$GITHUB_STEP_SUMMARY"
+            echo "e2e ran against the hosted TiDB/Aiven database configured in the MYSQL_E2E_URL secret." >> "$GITHUB_STEP_SUMMARY"
+            npm run db:e2e
+          else
+            echo "### Storage: ephemeral mysql:8.4 service container (fallback)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Set the **MYSQL_E2E_URL** Actions secret (TiDB Cloud / Aiven free tier) to run PR checks against a persistent database." >> "$GITHUB_STEP_SUMMARY"
+            MYSQL_E2E_URL="mysql://root:root@127.0.0.1:3306/app" npm run db:e2e
+          fi
