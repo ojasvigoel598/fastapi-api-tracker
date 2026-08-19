@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Session } from "@contracts/constants";
 import { authenticateRequest } from "./context";
+import { readJsonBounded } from "./lib/body";
 import { enforceAndRecord, getUsageLimit } from "./queries/usage";
 
 // Bounds for map-typed inputs so a hostile client cannot exhaust memory by
@@ -47,14 +48,15 @@ export async function handleIngest(request: Request): Promise<Response> {
   const user = await authenticateRequest(request.headers);
   if (!user) return json({ error: "Authentication required" }, 401);
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: "Request body must be valid JSON" }, 400);
+  const read = await readJsonBounded(request);
+  if (!read.ok) {
+    return json(
+      { error: read.reason === "too_large" ? "Payload Too Large" : "Request body must be valid JSON" },
+      read.reason === "too_large" ? 413 : 400,
+    );
   }
 
-  const parsed = ingestSchema.safeParse(body);
+  const parsed = ingestSchema.safeParse(read.value);
   if (!parsed.success) {
     return json(
       { error: "Invalid telemetry payload", issues: parsed.error.issues },

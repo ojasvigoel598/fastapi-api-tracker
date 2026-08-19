@@ -17,6 +17,7 @@
  */
 
 import { z } from "zod";
+import { readJsonBounded } from "./lib/body";
 import { findUserByApiKey, touchApiKey } from "./queries/api-keys";
 import {
   getWebhookDelivery,
@@ -159,20 +160,21 @@ export async function handleWebhookIngest(request: Request): Promise<Response> {
   if (!auth.ok) return auth.response;
   const owner = auth.owner;
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: "Request body must be valid JSON" }, 400);
+  const read = await readJsonBounded(request);
+  if (!read.ok) {
+    return json(
+      { error: read.reason === "too_large" ? "Payload Too Large" : "Request body must be valid JSON" },
+      read.reason === "too_large" ? 413 : 400,
+    );
   }
 
   // Accept either a single event or a batch wrapper. Everything is
   // validated by the shared ingest schema.
-  const single = ingestSchema.safeParse(body);
+  const single = ingestSchema.safeParse(read.value);
   const events = single.success
     ? [single.data]
-    : batchSchema.safeParse(body).success
-      ? batchSchema.parse(body).events
+    : batchSchema.safeParse(read.value).success
+      ? batchSchema.parse(read.value).events
       : null;
 
   if (!events) {

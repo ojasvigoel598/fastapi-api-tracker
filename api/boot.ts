@@ -4,6 +4,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
+import { readBodyBounded, MAX_BODY_BYTES as BODY_CAP } from "./lib/body";
 import { handleIngest, handleCheckLimit } from "./ingest";
 import { handleWebhookIngest, handleWebhookReplay } from "./webhook";
 
@@ -27,10 +28,9 @@ const app = new Hono<{ Bindings: HttpBindings }>();
  * guard keeps the 50 MB cap for the common case while never consuming or
  * rebuilding the stream.
  */
-const MAX_BODY_BYTES = 50 * 1024 * 1024;
 app.use(async (c, next) => {
   const contentLength = Number(c.req.header("content-length") ?? 0);
-  if (contentLength > MAX_BODY_BYTES) {
+  if (contentLength > BODY_CAP) {
     return c.json({ error: "Payload Too Large" }, 413);
   }
   return next();
@@ -76,9 +76,27 @@ app.onError((err, c) => {
 });
 
 app.use("/api/trpc/*", async (c) => {
+  // tRPC reads the raw request body itself, so a chunked/unknown-length
+  // body would bypass the content-length cap above. Read it bounded here
+  // and hand tRPC a reconstructed Request carrying the capped bytes.
+  let req = c.req.raw;
+  if (req.body && (req.method === "POST" || req.method === "PUT" || req.method === "PATCH")) {
+    const contentLength = Number(req.headers.get("content-length") ?? 0);
+    if (contentLength <= BODY_CAP) {
+      const read = await readBodyBounded(req);
+      if (!read.ok) {
+        return c.json({ error: "Payload Too Large" }, 413);
+      }
+      req = new Request(req.url, {
+        method: req.method,
+        headers: req.headers,
+        body: read.bytes,
+      });
+    }
+  }
   return fetchRequestHandler({
     endpoint: "/api/trpc",
-    req: c.req.raw,
+    req,
     router: appRouter,
     createContext,
     onError: ({ error, path }) => {
