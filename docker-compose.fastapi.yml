@@ -1,0 +1,81 @@
+# One-command production stack: MySQL 8 + FastAPI-based tracker.
+#
+# Usage:
+#   docker compose -f docker-compose.fastapi.yml up --build
+#
+# The app is then available at http://localhost:8000 (override with PORT).
+# Set MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD / APP_SECRET in a .env file.
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: api_monitor
+      MYSQL_USER: api_monitor
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-api_monitor_dev}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_dev_only}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "127.0.0.1",
+          "-u",
+          "root",
+          "-p$$MYSQL_ROOT_PASSWORD",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: apply the Drizzle migrations, then exit.
+  migrate:
+    build:
+      context: .
+      target: node-build
+    environment:
+      DATABASE_URL: mysql://api_monitor:${MYSQL_PASSWORD:-api_monitor_dev}@mysql:3306/api_monitor
+    command: npx drizzle-kit migrate
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # FastAPI-based tracker server
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.fastapi
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+      NODE_INTERNAL_PORT: 3001
+      DATABASE_URL: mysql://api_monitor:${MYSQL_PASSWORD:-api_monitor_dev}@mysql:3306/api_monitor
+      APP_SECRET: ${APP_SECRET:-change-me-to-a-long-random-secret}
+      # Optional integrations:
+      # OWNER_EMAIL: ${OWNER_EMAIL:-}
+      # OWNER_PASSWORD: ${OWNER_PASSWORD:-}
+      # RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # RESEND_FROM: ${RESEND_FROM:-}
+      # APP_URL: ${APP_URL:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://127.0.0.1:8000/health').raise_for_status()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  mysql_data:

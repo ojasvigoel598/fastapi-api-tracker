@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+
+# ─────────────────────────────────────────────────────────────────────
+# FastAPI deployment — serves the tracker behind uvicorn + FastAPI.
+#
+# Usage:
+#   docker build -f Dockerfile.fastapi -t tracker-fastapi .
+#   docker compose -f docker-compose.fastapi.yml up --build
+#
+# The Node.js backend runs as a managed subprocess inside the FastAPI
+# server (server.py proxies /api/* to it and serves the SPA).
+# ─────────────────────────────────────────────────────────────────────
+
+# Stage 1 — Node.js build (produces dist/)
+FROM node:24-alpine AS node-build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 2 — Python runtime + bundled Node artifacts
+FROM python:3.13-slim AS runtime
+
+# Install Node.js runtime (needed for the Hono backend subprocess)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Python dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Built frontend + Node.js backend bundle
+COPY --from=node-build /app/dist ./dist
+COPY --from=node-build /app/node_modules ./node_modules
+COPY --from=node-build /app/package.json ./
+COPY server.py ./
+
+ENV NODE_ENV=production
+ENV PORT=8000
+ENV NODE_INTERNAL_PORT=3001
+EXPOSE 8000
+
+# Health check against FastAPI's own /health (no Node dependency)
+HEALTHCHECK --interval=15s --timeout=5s --retries=5 --start-period=30s \
+    CMD python -c "import httpx; r=httpx.get('http://127.0.0.1:8000/health'); r.raise_for_status()" || exit 1
+
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]

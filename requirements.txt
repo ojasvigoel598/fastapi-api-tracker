@@ -1,0 +1,11 @@
+# fastapi-api-tracker — Python deployment dependencies
+#
+# Install:  pip install -r requirements.txt
+# Run:      uvicorn server:app --host 0.0.0.0 --port 8000
+#
+# The Node.js runtime and built assets (dist/) are still required.
+# Run `npm run build` before starting the FastAPI server.
+
+fastapi>=0.115.0,<1.0
+uvicorn[standard]>=0.34.0,<1.0
+httpx>=0.28.0,<1.0
