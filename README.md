@@ -1,4 +1,6 @@
-# API Monitoring & Admin Dashboard
+# API Monitor
+
+**Real-time API monitoring, analytics, and alerting — run it in 30 seconds, wire it to your API in 5 minutes.**
 
 ![CI](https://github.com/ojasvigoel598/fastapi-api-tracker/actions/workflows/ci.yml/badge.svg)
 ![PR Checks](https://github.com/ojasvigoel598/fastapi-api-tracker/actions/workflows/pr.yml/badge.svg)
@@ -6,16 +8,238 @@
 [![Docker pulls](https://ghcr-badge.elias.eu.org/shield/ojasvigoel598/fastapi-api-tracker)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
 [![Docker size](https://ghcr-badge.egpl.dev/ojasvigoel598/fastapi-api-tracker/size?tag=latest&label=image%20size&color=%2344cc11)](https://github.com/ojasvigoel598/fastapi-api-tracker/pkgs/container/fastapi-api-tracker)
 
-A full-stack API monitoring dashboard: request logs, analytics charts, endpoints,
-alerts, and AI-assisted insights.
+API Monitor is a full-stack dashboard that tracks your API's request logs, failure rates, latency percentiles, endpoints, alerts, and AI-assisted insights — with per-user isolation and enforced rate/cost limits. It's the "Grafana for your own API" without the setup.
 
-## Stack
+**What is this? → How do I try it? → How does it work?** — everything below.
 
-- Frontend: React, Vite, TypeScript, Tailwind CSS, shadcn/ui
-- Backend: Hono, Node.js, tRPC
-- Database: MySQL + Drizzle ORM
-- Authentication: **Clerk** (optional) + email/password (local) + optional Supabase Auth
-- AI (optional): Kimi (Moonshot AI)
+---
+
+## 🎮 Try the app now (2 minutes, zero credentials)
+
+There is **no hosted demo URL yet** — but you don't need one. The app runs with **no API keys, no database, and no signup**:
+
+```bash
+npm install
+npm run dev        # http://localhost:3000
+```
+
+Then open the app and sign in with the seeded demo account:
+
+| | |
+| --- | --- |
+| **Email** | `demo@example.com` |
+| **Password** | `demo1234` |
+
+…or click **"Use demo account"** on the login screen — it's one click. You land on a fully populated dashboard (KPI cards, charts, insights, failures) because each new account is seeded with demo telemetry. No internet required.
+
+**Prefer Docker?** One command, MySQL included:
+
+```bash
+docker compose up --build   # app → http://localhost:3000
+```
+
+**Deploy it instead?** It's Vercel-ready and ships a one-command deploy setup — see [Deploy to Vercel](#deploy-to-vercel).
+
+> **Works on:** desktop browsers (primary). The UI is responsive and adapts to smaller screens — see [📱 Mobile support](#-mobile-support).
+
+---
+
+## 📸 Demo
+
+![Dashboard — KPI cards, request-volume chart, status codes, insights](docs/screenshots/02-dashboard.png)
+
+The dashboard is live-updating: every 10s it re-polls, so telemetry pushed through the webhook appears without a manual refresh.
+
+| | |
+| --- | --- |
+| ![Login screen with demo-account button](docs/screenshots/01-login.png) | ![Request logs table](docs/screenshots/03-requests.png) |
+| ![Analytics with charts](docs/screenshots/04-analytics.png) | ![Endpoints table with percentiles](docs/screenshots/05-endpoints.png) |
+| ![Alerts list](docs/screenshots/06-alerts.png) | ![Limits & rate limiting](docs/screenshots/07-limits.png) |
+| ![Webhooks with API keys and deliveries](docs/screenshots/08-webhooks.png) | |
+
+---
+
+## 🕹️ How to use it (first 5 minutes)
+
+1. **Sign in** (use the demo account above, or create your own — each account is fully isolated).
+2. **Look around** — the Dashboard shows total requests, failure rate, average latency, active endpoints, charts, automated insights, top endpoints, active alerts, and recent failures. Try the time-range picker (24h / 7d / 30d / custom).
+3. **Create a webhook key** — open **Webhooks → Create key** and copy the `apk_...` token (shown exactly once, stored hashed).
+4. **Push real telemetry** from your terminal:
+
+   ```bash
+   curl -X POST http://localhost:3000/api/webhook/ingest \
+     -H "Authorization: Bearer apk_..." \
+     -H "Content-Type: application/json" \
+     -d '{"endpoint":"/api/v1/users","method":"GET","statusCode":200,"latencyMs":42}'
+   ```
+
+5. **Watch it appear live** — within ~10 seconds the dashboard shows the new request, auto-discovers the endpoint, and updates failure rate / latency percentiles. Send a `statusCode: 503` event and watch it land in **Recent Failures**.
+6. **Set a limit** — open **Limits**, configure a daily cap on an endpoint, then hammer the webhook: over-limit requests are blocked with `429` and counted as blocked, atomically.
+
+**Want the tracker to collect from your API automatically?** Drop in one of the ready-to-use middleware files — [FastAPI](integrations/fastapi/telemetry.py) or [Express/Node](integrations/express/telemetry.mjs) — see [Track your own API](#track-your-own-api-fastapi--express).
+
+---
+
+## ✨ Features
+
+- **Live telemetry webhook** — external APIs/gateways push events as they happen (single or batched, up to 500 per call); the dashboard refreshes every 10s.
+- **Analytics** — request volume, failure rate, status-code distribution, latency distribution, and per-endpoint **p50/p95/p99 percentiles** computed in MySQL with window functions.
+- **Automated AI insights** — anomalies and trends explained in plain language (optional Kimi integration; deterministic mock mode offline).
+- **Alerts** — configurable thresholds with severity, acknowledgment, and optional email alerts (Resend).
+- **Limits & rate limiting** — hard daily/monthly/cost caps per endpoint, enforced **atomically** at ingest (row-lock transaction — concurrent bursts can't over-count).
+- **Webhook replay** — the last 25 deliveries per account are stored; re-fire any of them from the UI or over REST.
+- **Multi-user isolation** — every row is scoped to the signed-in user; one account can never read another's data (RLS-equivalent at the query layer).
+- **Flexible auth** — local email/password (zero-credential default) or optional Clerk / Supabase.
+- **Secure by default** — zod validation on every input, no stack traces leaked, AI keys server-only, webhook keys SHA-256 hashed at rest, login brute-force protection.
+- **One-command production** — Docker Compose (MySQL + app) or Vercel Build Output API.
+
+---
+
+## 🧠 How it works
+
+```
+Your API (FastAPI / Express / gateway)
+        │  one event per request (fire-and-forget middleware)
+        ▼
+POST /api/webhook/ingest  ──Bearer apk_...──►  API Monitor
+        │                                          │
+        │  validates (zod) + enforces limits        │  MySQL (Drizzle ORM)
+        │  atomically (row lock)                    │
+        ▼                                          ▼
+   dashboard queries  ◄── 10s poll  ◄──  KPI cards, charts, insights, alerts
+```
+
+The app is a **telemetry collector, not a proxy** — the API being monitored *pushes* data to it, so nothing sits in front of your traffic:
+
+- You create an `apk_...` key in the dashboard (the only credential involved).
+- Your API server sends one event per served request (ready-to-drop middleware for [FastAPI](integrations/fastapi/README.md) and [Express](integrations/express/README.md), or any HTTP client / gateway plugin).
+- The dashboard derives everything automatically: failure rate (from status codes), latency percentiles, endpoint discovery, cost (optional `cost` field), alerts, and limit enforcement.
+- Limits are enforced by the tracker itself — optionally with a `check-rate-limit` pre-flight call from your gateway before forwarding a request.
+
+---
+
+## 🛠️ Technology
+
+- **Frontend:** React, Vite, TypeScript, Tailwind CSS, shadcn/ui, Recharts
+- **Backend:** Hono, Node.js, tRPC (superjson), Drizzle ORM
+- **Database:** MySQL 8 (TiDB Cloud Serverless / Aiven free tier compatible — TLS honoured via `ssl-mode`)
+- **Auth:** local email/password (scrypt, default) · optional Clerk · optional Supabase
+- **AI (optional):** Kimi (Moonshot AI) — server-side only
+- **Deploy:** Vercel (Build Output API), Docker, GitHub Actions CI/CD
+
+---
+
+## 📱 Mobile support
+
+Desktop-first, but responsive throughout: the sidebar collapses on small screens, grids stack (KPI cards go 4 → 2 → 1 columns), and tables remain scrollable. The "Open in tab" control escapes preview iframes where partitioned storage can interfere with sessions. Tested down to phone widths.
+
+---
+
+## 🚀 Run locally
+
+**Zero-credential demo** (recommended for trying it):
+
+```bash
+npm install
+npm run dev          # http://localhost:3000  (Vite + Hono API on one port)
+```
+
+Sign in with `demo@example.com` / `demo1234` or create your own account. Data is seeded in-memory and resets on restart. Kimi runs in mock mode automatically.
+
+**With a real persistent database** (TiDB Cloud / Aiven free tier — one command):
+
+```bash
+MYSQL_URL="mysql://user:pass@host:4000/db?ssl-mode=REQUIRED" npm run db:setup
+npm run dev          # /api/health now reports mode=production
+```
+
+**Docker (full stack, MySQL + migrations + app):**
+
+```bash
+docker compose up --build   # http://localhost:3000
+```
+
+**Scripts worth knowing:** `npm test` (72 offline unit tests), `npm run check` (tsc), `npm run lint`, `npm run db:e2e` (full real-MySQL end-to-end harness). See [Scripts](#scripts) for the rest.
+
+---
+
+## Track your own API (FastAPI / Express)
+
+The tracker records telemetry you push to it — it cannot see traffic it is
+not told about. Ready-to-drop middleware for **FastAPI** (Python,
+`integrations/fastapi/telemetry.py`) and **Express / Node** (ESM, zero
+dependencies, `integrations/express/telemetry.mjs`) stream one event per
+served request to the webhook automatically. For a FastAPI app:
+
+```bash
+pip install httpx
+```
+
+```python
+import os
+from fastapi import FastAPI
+from telemetry import TelemetryMiddleware  # from integrations/fastapi/
+
+app = FastAPI()
+app.add_middleware(TelemetryMiddleware)
+```
+
+Then set two env vars on your API server (never in the browser):
+
+| Variable | Description |
+| --- | --- |
+| `TRACKER_URL` | This app's base URL, e.g. `https://tracker.example.com` |
+| `TRACKER_API_KEY` | An `apk_...` key created on the **Webhooks** page |
+
+From then on the dashboard automatically shows your API's failure rate,
+latency percentiles, endpoints, and (optionally) cost — with per-user
+isolation, configured rate limits enforced atomically at ingest, and
+email alerts on breach. The middleware is fire-and-forget (adds ~0 ms,
+never blocks or breaks your API), forwards only safe headers, and never
+logs the key. Optional extras: a `cost_cb` / `costCb` hook for LLM-style per-request
+cost and a `check_rate_limit()` / `checkRateLimit()` pre-flight helper.
+Express setup is identical with `telemetryMiddleware()` + `TRACKER_URL` /
+`TRACKER_API_KEY`. Full guides: `integrations/fastapi/README.md` and
+`integrations/express/README.md`.
+
+## Real-time telemetry webhook
+
+External API gateways can push request telemetry **as it happens** — no browser
+session required. Create a key on the **Webhooks** page (sidebar), then:
+
+```bash
+curl -X POST https://your-app/api/webhook/ingest \
+  -H "Authorization: Bearer apk_..." \
+  -H "Content-Type: application/json" \
+  -d '{"endpoint":"/api/v1/users","method":"GET","statusCode":200,"latencyMs":42}'
+```
+
+- Authenticates with a long-lived API key (SHA-256 hashed at rest; the
+  plaintext is shown exactly once at creation and can never be recovered).
+- Accepts a single event or a batch: `{"events":[...]}` (up to 500).
+- Uses the same payload schema, validation, atomic rate-limit enforcement,
+  and usage limits as `POST /api/ingest`, so both channels feed the same
+  monitoring queries and limits.
+- The dashboard polls every 10s, so webhook-streamed telemetry appears live
+  without a manual refresh.
+
+**Replay:** the most recent 25 deliveries per account are stored (the exact
+validated event payloads, never the bearer keys). On the **Webhooks** page,
+**Recent deliveries** lets you re-fire any delivery with one click — useful
+after fixing a consumer bug. Replays go through the exact same ingest and
+rate-limit path, so an over-limit batch is blocked again (and the replay
+itself is recorded as a new delivery).
+
+Replay is also available over the REST API with the same bearer key, e.g. to
+re-fire the delivery with id `42` from a gateway script:
+
+```bash
+curl -X POST https://your-app/api/webhook/replay/42 \
+  -H "Authorization: Bearer apk_..."
+# 200 → {"ok":true,"replayId":43,"received":2,"blocked":false}
+# 429 → {"ok":false,"blocked":true,...} when the replayed batch is over limit
+# 404 → the delivery id does not belong to this key's user
+```
 
 ## Authentication architecture
 
@@ -62,84 +286,6 @@ local demo or Supabase path remains active.
 
 Every monitoring route is authenticated and scoped to the signed-in user, so one
 account can never read or modify another account's requests, alerts, or metrics.
-
-## Real-time telemetry webhook
-
-External API gateways can push request telemetry **as it happens** — no browser
-session required. Create a key on the **Webhooks** page (sidebar), then:
-
-```bash
-curl -X POST https://your-app/api/webhook/ingest \
-  -H "Authorization: Bearer apk_..." \
-  -H "Content-Type: application/json" \
-  -d '{"endpoint":"/api/v1/users","method":"GET","statusCode":200,"latencyMs":42}'
-```
-
-- Authenticates with a long-lived API key (SHA-256 hashed at rest; the
-  plaintext is shown exactly once at creation and can never be recovered).
-- Accepts a single event or a batch: `{"events":[...]}` (up to 500).
-- Uses the same payload schema, validation, atomic rate-limit enforcement,
-  and usage limits as `POST /api/ingest`, so both channels feed the same
-  monitoring queries and limits.
-- The dashboard polls every 10s, so webhook-streamed telemetry appears live
-  without a manual refresh.
-
-**Replay:** the most recent 25 deliveries per account are stored (the exact
-validated event payloads, never the bearer keys). On the **Webhooks** page,
-**Recent deliveries** lets you re-fire any delivery with one click — useful
-after fixing a consumer bug. Replays go through the exact same ingest and
-rate-limit path, so an over-limit batch is blocked again (and the replay
-itself is recorded as a new delivery).
-
-Replay is also available over the REST API with the same bearer key, e.g. to
-re-fire the delivery with id `42` from a gateway script:
-
-```bash
-curl -X POST https://your-app/api/webhook/replay/42 \
-  -H "Authorization: Bearer apk_..."
-# 200 → {"ok":true,"replayId":43,"received":2,"blocked":false}
-# 429 → {"ok":false,"blocked":true,...} when the replayed batch is over limit
-# 404 → the delivery id does not belong to this key's user
-```
-
-## Track your own API (FastAPI / Express)
-
-The tracker records telemetry you push to it — it cannot see traffic it is
-not told about. Ready-to-drop middleware for **FastAPI** (Python,
-`integrations/fastapi/telemetry.py`) and **Express / Node** (ESM, zero
-dependencies, `integrations/express/telemetry.mjs`) stream one event per
-served request to the webhook automatically. For a FastAPI app:
-
-```bash
-pip install httpx
-```
-
-```python
-import os
-from fastapi import FastAPI
-from telemetry import TelemetryMiddleware  # from integrations/fastapi/
-
-app = FastAPI()
-app.add_middleware(TelemetryMiddleware)
-```
-
-Then set two env vars on your API server (never in the browser):
-
-| Variable | Description |
-| --- | --- |
-| `TRACKER_URL` | This app's base URL, e.g. `https://tracker.example.com` |
-| `TRACKER_API_KEY` | An `apk_...` key created on the **Webhooks** page |
-
-From then on the dashboard automatically shows your API's failure rate,
-latency percentiles, endpoints, and (optionally) cost — with per-user
-isolation, configured rate limits enforced atomically at ingest, and
-email alerts on breach. The middleware is fire-and-forget (adds ~0 ms,
-never blocks or breaks your API), forwards only safe headers, and never
-logs the key. Optional extras: a `cost_cb` / `costCb` hook for LLM-style per-request
-cost and a `check_rate_limit()` / `checkRateLimit()` pre-flight helper.
-Express setup is identical with `telemetryMiddleware()` + `TRACKER_URL` /
-`TRACKER_API_KEY`. Full guides: `integrations/fastapi/README.md` and
-`integrations/express/README.md`.
 
 ## Docker (one-command production)
 
@@ -378,24 +524,20 @@ deploys it to Vercel with `--prebuilt` — gated on the quality job and
 skipped until the `VERCEL_TOKEN` / `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID`
 secrets are configured.
 
-## Zero-credential local demo
-
-No API keys, no database, no external services required:
+## Database setup
 
 ```bash
-npm install
-npm run dev     # http://localhost:3000
+npm run db:generate
+npm run db:migrate
+# or
+npm run db:push
+npm run db:seed                  # requires at least one application user
+SEED_USER_ID=123 npm run db:seed # target a specific existing user
 ```
 
-Open the app and either **create an account** or sign in with the seeded demo
-account:
-
-- email: `demo@example.com`
-- password: `demo1234`
-
-Each new account gets its own seeded monitoring dataset, so multi-user isolation
-is exercised offline. Kimi runs in mock mode automatically. Data resets on every
-restart.
+The SQL seed script always assigns rows to an existing application user. It
+fails closed when no user exists, rather than creating rows with an unusable
+`user_id=0` that no authenticated account could read.
 
 ## Environment variables
 
@@ -472,132 +614,8 @@ npm run db:push      # push the Drizzle schema directly to MySQL
 npm run db:verify    # run real Drizzle queries against MySQL to prove the prod data path
 npm run db:seed      # seed the first user (or SEED_USER_ID=<id>) with demo telemetry
 npm run db:e2e       # full real-MySQL e2e (ephemeral MySQL; or MYSQL_E2E_URL=...)
+npm run db:setup     # one-command persistent DB wiring (MYSQL_URL=... validates, migrates, writes .env.local)
 ```
-
-## Preview recovery & sandbox recycling
-
-The app is **IP-agnostic**: the frontend calls the backend on the **same origin**
-(relative `/api/trpc`), and the dev server binds to `0.0.0.0`. Nothing stores or
-depends on a temporary container IP, so a recycled sandbox (new container/IP)
-works as soon as the process comes back up.
-
-- `GET /api/health` — unauthenticated readiness probe (no database, no external
-  calls). Safe for the preview proxy and load balancers to poll.
-- The SPA polls `/api/health`; if the backend disappears it shows a
-  "Connection lost — reconnecting…" banner and retries with **exponential
-  backoff** (1s → 2s → 4s … capped at 30s), then reconnects automatically when
-  the backend returns — no manual refresh required.
-
-### Sign-in across the preview iframe and tabs
-
-Sign-in no longer depends on a single cookie. On login the server:
-
-1. Sets an httpOnly `app_sid` cookie whose flags match the request context:
-   - `SameSite=Lax` for same-origin / top-level tab access (the common case).
-   - `SameSite=None` only for a genuine cross-site iframe.
-   - `Secure` only when the request actually arrives over HTTPS
-     (`x-forwarded-proto: https`). Marking a cookie `Secure` while serving over
-     plain HTTP makes browsers silently drop it — the original cause of the
-     "sign in, then immediately back to sign-in" loop.
-   - It never uses the `Partitioned` (CHIPS) attribute, which scopes a cookie to
-     the embedding top-level site and makes it disappear when the app is opened
-     in its own tab.
-2. Also returns the signed session token in the login response body. The client
-   stores it and sends it as `Authorization: Bearer <token>` on every request,
-   so the session survives preview proxies that strip or rewrite `Set-Cookie`
-   headers.
-
-An **“Open in tab”** control (on the login screen, the sign-in prompt, and the
-sidebar) opens the app in a fresh browser tab — escaping the preview iframe
-where third-party cookie/storage partitioning can otherwise interfere with the
-session.
-
-### Automatic restart after sandbox recycles
-
-The sandbox periodically recycles its container, which kills the foreground
-dev process — this is what makes the preview proxy return
-`502 proxy upstream error` until something restarts the app. To recover
-without manual intervention:
-
-- `scripts/start-preview.sh` is a boot-time supervisor: it waits for the
-  project directory, checks `GET /api/health`, and runs `npm run dev`
-  (Vite + Hono API on port 3000) only when nothing is already serving the
-  port. It restarts the server again if it ever crashes.
-- The sandbox's `start-services.sh` invokes that supervisor on every boot, so
-  the dashboard comes back on its own after each recycle.
-
-`start-services.sh` lives in the sandbox image rather than this repository. On
-a fresh sandbox that is missing the hook, add this line before its `exit 0`:
-
-```sh
-(sh "/home/daytona/codebase/scripts/start-preview.sh" >/tmp/freebuff-preview-supervisor.log 2>&1 &)
-```
-
-### Data persistence across restarts
-
-- **Demo mode** (no `DATABASE_URL`): data lives in memory and is re-seeded on
-  every start, so it resets when the sandbox recycles. This is intentional and
-  labelled in the UI.
-- **Production** (`DATABASE_URL` set): all data lives in external MySQL and
-  survives sandbox recycles because the database is outside the container.
-
-The preview sandbox lifecycle (start/stop/recycle and the proxy's
-container-IP resolution) is managed by the Freebuff platform, not by this
-repository. With the boot-time supervisor above in place the app restarts
-itself after a recycle; if a fresh sandbox lacks the hook, restart the preview
-from the platform (`freebuff-preview restart` where the CLI is available) — the
-app itself starts cleanly with no leftover-state dependency.
-
-## Database setup
-
-```bash
-npm run db:generate
-npm run db:migrate
-# or
-npm run db:push
-npm run db:seed                  # requires at least one application user
-SEED_USER_ID=123 npm run db:seed # target a specific existing user
-```
-
-The SQL seed script always assigns rows to an existing application user. It
-fails closed when no user exists, rather than creating rows with an unusable
-`user_id=0` that no authenticated account could read.
-
-## Proof / Verification
-
-Verified against the live Freebuff preview on 2026-08-15. The sandbox runs in
-zero-credential demo mode (no `DATABASE_URL`), so the seeded demo account is
-`demo@example.com` / `demo1234`. The preview URL is ephemeral (it changes per
-sandbox); the one used below was
-`https://3000-0008bce4-0e49-48b5-a7a9-9fa3418ea097.daytonaproxy01.net`.
-
-| # | Check | Result |
-| --- | --- | --- |
-| 1 | Typecheck — `npm run check` | ✅ passed (no errors) |
-| 2 | Test suite — `npm test` | ✅ 54 passed (9 files) |
-| 3 | Readiness probe — `GET /api/health` | ✅ `200` `{"ok":true,"mode":"demo"}` |
-| 4 | Sign in — `POST /api/trpc/auth.login` | ✅ `200`, `set-cookie: app_sid=…; HttpOnly; Secure; SameSite=Lax`, body contains the signed `token` |
-| 5 | Session via cookie — `GET /api/trpc/auth.me` | ✅ `200`, returns `demo@example.com` |
-| 6 | Session via bearer token (no cookie) — `GET /api/trpc/auth.me` with `Authorization: Bearer <token>` | ✅ `200`, returns `demo@example.com` |
-| 7 | Frontend serves — `GET /` | ✅ Vite dev `index.html` with `/src/main.tsx` |
-
-The automated suite additionally covers (offline, no external services): the
-login → session-cookie → `auth.me` flow, bearer-token authentication, multi-user
-data isolation, `/api/ingest` telemetry, webhook API-key create/list/revoke and
-single/batch ingest with 401/400 enforcement, the failure-history endpoint (30
-failures by default with pagination), and usage-limit thresholds, resets,
-duplicate-alert suppression, and hard-limit enforcement.
-
-Latency percentiles (p50/p95/p99) are computed in MySQL with window functions
-(nearest-rank), and the overview p95 is computed in SQL instead of downloading
-every row — both stay constant-memory at any volume.
-
-**Screenshots** were not captured in this environment because the sandbox has no
-browser tooling, and the managed preview proxy is controlled by Freebuff (it
-recycles the sandbox independently of this repository). To reproduce visually:
-run `npm install && npm run dev`, open `http://localhost:3000`, sign in with the
-demo account, and confirm the Dashboard shows the KPI cards, charts, alerts, and
-recent failures.
 
 ## Project structure
 
@@ -606,6 +624,7 @@ recent failures.
 │   └── vercel.ts         # Vercel serverless entry (path reconstruction)
 ├── contracts/            # Shared constants and errors
 ├── db/                   # Drizzle schema, relations, seed script
+├── docs/screenshots/     # README screenshots (captured from the running app)
 ├── integrations/         # Ready-to-drop client SDKs (FastAPI + Express telemetry middleware)
 ├── scripts/              # start-preview.sh, vercel-build.mjs, vercel-smoke.mjs, migrate.ts, setup-vercel-deploy.mjs
 ├── src/                  # React frontend (pages, components, providers)
@@ -679,7 +698,7 @@ covered by multi-user isolation tests and by the real-MySQL e2e harness.
 - Server logs never print request bodies, bearer tokens, or API keys; the
   e2e harness deliberately truncates keys in its output.
 - Telemetry stored by the tracker is the payload the API chose to send;
-  the middleware docs (see [Track your own FastAPI API](#track-your-own-fastapi-api))
+  the middleware docs (see [Track your own FastAPI API](#track-your-own-api-fastapi--express))
   only forward an allowlisted subset of headers.
 
 ## Security notes
@@ -694,3 +713,11 @@ covered by multi-user isolation tests and by the real-MySQL e2e harness.
   an `Authorization: Bearer` header. This is a signed HS256 JWT (not a raw
   credential) and is only meaningful alongside the rest of the session; the
   httpOnly cookie remains the primary channel when it is available.
+
+## Contributing
+
+This is a personal project maintained with a strict CI bar (typecheck, lint,
+72+ tests, real-MySQL e2e). PRs welcome — open one and the `pr.yml` workflow
+checks it automatically. Keep changes focused, add tests for new behavior,
+and never commit `.env` files or secrets. See the CI section above for what
+runs on every push.
