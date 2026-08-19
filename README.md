@@ -333,14 +333,20 @@ below). Free services may power down after inactivity and wake on demand.
 
 ## Continuous integration (GitHub Actions)
 
-`.github/workflows/ci.yml` runs on every push and PR:
-`npm ci` → `tsc -b` → eslint → vitest → production build → **Vercel output
-build + serverless-function smoke test** → in-process smoke-boot of the
-production bundle → **real-MySQL end-to-end** (boots a `mysql:8.4` service,
-applies the migrations, registers a user, seeds 1500 rows, verifies
-percentiles, ingests webhook telemetry and confirms it persisted). The
-MySQL job is what catches SQL bugs the in-memory demo-store unit tests
-can't — e.g. the p95 window-function query or timestamp precision.GitHub runs everything automatically on this repository. The MySQL job also
+Two workflows run automatically on this repository:
+
+- **`.github/workflows/ci.yml`** — on every push to `main`/`master`:
+  `npm ci` → `tsc -b` → eslint → vitest → production build → **Vercel output
+  build + serverless-function smoke test** → in-process smoke-boot of the
+  production bundle → **real-MySQL end-to-end** (boots a `mysql:8.4` service,
+  applies the migrations, registers a user, seeds 1500 rows, verifies
+  percentiles, ingests webhook telemetry and confirms it persisted) → pushes
+  the Docker image to GHCR → deploys to Vercel.
+- **`.github/workflows/pr.yml`** (PR Checks) — on every pull request: the
+  same quality gates and real-MySQL e2e, without any deploys.
+
+The MySQL job is what catches SQL bugs the in-memory demo-store unit tests
+can't — e.g. the p95 window-function query or timestamp precision. It also
 proves **rate-limit hardening**: it configures a hard daily limit, fires a
 burst of concurrent webhook ingests against the real database, and asserts
 exactly the allowed number pass (no over-counting under the row-lock
