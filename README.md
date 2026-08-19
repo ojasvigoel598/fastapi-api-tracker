@@ -98,23 +98,15 @@ The dashboard is live-updating: every 10s it re-polls, so telemetry pushed throu
 ## 🧠 How it works
 
 ```
-Your API (FastAPI / Express / gateway)
-        │  one event per request (fire-and-forget middleware)
-        ▼
-POST /api/webhook/ingest  ──Bearer apk_...──►  API Monitor
-        │                                          │
-        │  validates (zod) + enforces limits        │  MySQL (Drizzle ORM)
-        │  atomically (row lock)                    │
-        ▼                                          ▼
-   dashboard queries  ◄── 10s poll  ◄──  KPI cards, charts, insights, alerts
+  Your API ──1 event per request──▶ API Monitor Dashboard
+  (FastAPI / Express)    (webhook)    (live KPIs, charts,
+                                      alerts, AI insights)
 ```
 
-The app is a **telemetry collector, not a proxy** — the API being monitored *pushes* data to it, so nothing sits in front of your traffic:
-
-- You create an `apk_...` key in the dashboard (the only credential involved).
-- Your API server sends one event per served request (ready-to-drop middleware for [FastAPI](integrations/fastapi/README.md) and [Express](integrations/express/README.md), or any HTTP client / gateway plugin).
-- The dashboard derives everything automatically: failure rate (from status codes), latency percentiles, endpoint discovery, cost (optional `cost` field), alerts, and limit enforcement.
-- Limits are enforced by the tracker itself — optionally with a `check-rate-limit` pre-flight call from your gateway before forwarding a request.
+Your API *pushes* telemetry — nothing sits in front of your traffic.
+Create an `apk_...` key, drop in one middleware file, and the dashboard
+automatically shows failure rate, latency percentiles, endpoint discovery,
+and alerts. Limits are enforced atomically at ingest.
 
 ---
 
