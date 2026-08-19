@@ -159,7 +159,7 @@ npm run dev          # /api/health now reports mode=production
 docker compose up --build   # http://localhost:3000
 ```
 
-**Scripts worth knowing:** `npm test` (72 offline unit tests), `npm run check` (tsc), `npm run lint`, `npm run db:e2e` (full real-MySQL end-to-end harness). See [Scripts](#scripts) for the rest.
+**Scripts worth knowing:** `npm test` (110 offline unit tests), `npm run check` (tsc), `npm run lint`, `npm run db:e2e` (full real-MySQL end-to-end harness). See [Scripts](#scripts) for the rest.
 
 ---
 
@@ -759,7 +759,7 @@ covered by multi-user isolation tests and by the real-MySQL e2e harness.
 ## Contributing
 
 This is a personal project maintained with a strict CI bar (typecheck, lint,
-72+ tests, real-MySQL e2e). PRs welcome — open one and the `pr.yml` workflow
+110+ tests, real-MySQL e2e). PRs welcome — open one and the `pr.yml` workflow
 checks it automatically. Keep changes focused, add tests for new behavior,
 and never commit `.env` files or secrets. See the CI section above for what
 runs on every push.
